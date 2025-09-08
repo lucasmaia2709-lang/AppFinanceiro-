@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gestor Financeiro Pessoal</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Bibliotecas para exportar PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf-autotable.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -29,7 +32,7 @@
         
         <header class="text-center mb-6">
             <h1 class="text-3xl font-bold text-blue-600 dark:text-blue-400">Meu Saldo</h1>
-           
+            <p class="text-gray-500 dark:text-gray-400">Controle as suas finanças de forma simples.</p>
         </header>
         
         <main class="space-y-6">
@@ -41,15 +44,12 @@
 
             <!-- Formulários de Controlo -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <!-- Botão para Modal de Entrada -->
                 <button id="btn-income" onclick="openModal('incomeModal')" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md">
                     Adicionar Entrada
                 </button>
-                <!-- Botão para Modal de Despesa -->
                 <button id="btn-expense" onclick="openModal('expenseModal')" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md">
                     Adicionar Despesa
                 </button>
-                 <!-- Botão para Modal de Salário -->
                 <button id="btn-salary" onclick="openModal('salaryModal')" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md">
                     Definir Salário
                 </button>
@@ -59,7 +59,10 @@
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="text-xl font-semibold">Histórico</h3>
-                    <button id="btn-reset" onclick="resetApp()" class="text-sm text-gray-500 hover:text-red-500 transition-colors">Limpar Tudo</button>
+                    <div class="flex items-center gap-4">
+                         <button id="btn-export" onclick="openModal('exportModal')" class="text-sm text-blue-500 hover:text-blue-700 font-medium transition-colors">Exportar</button>
+                         <button id="btn-reset" onclick="resetApp()" class="text-sm text-gray-500 hover:text-red-500 transition-colors">Limpar Tudo</button>
+                    </div>
                 </div>
                 <ul id="transaction-list" class="space-y-3 max-h-60 overflow-y-auto pr-2">
                     <li id="no-transactions" class="text-center text-gray-500 dark:text-gray-400 py-4">Ainda não há transações.</li>
@@ -67,7 +70,27 @@
             </div>
         </main>
 
-        <!-- Modal para Adicionar Entrada (NOVO) -->
+        <!-- Modal para Exportar -->
+        <div id="exportModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
+                <h2 class="text-2xl font-bold mb-6 text-center">Exportar Histórico</h2>
+                <div class="space-y-4">
+                    <button onclick="exportToCSV()" class="w-full flex items-center justify-center gap-3 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 22h2a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h2"></path><path d="M16 16h2"></path><path d="M12 22V2"></path><path d="M8 16H6"></path><path d="M12 16.5h0"></path><path d="M12 13.5h0"></path><path d="M12 10.5h0"></path><path d="M12 7.5h0"></path><path d="M12 4.5h0"></path></svg>
+                        <span>Exportar para CSV (Excel)</span>
+                    </button>
+                    <button onclick="exportToPDF()" class="w-full flex items-center justify-center gap-3 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                        <span>Exportar para PDF</span>
+                    </button>
+                </div>
+                 <div class="text-center mt-6">
+                     <button type="button" onclick="closeModal('exportModal')" class="text-gray-500 hover:text-gray-700 text-sm">Cancelar</button>
+                 </div>
+            </div>
+        </div>
+
+        <!-- Outros Modals (sem alterações) -->
         <div id="incomeModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4">
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
                 <h2 class="text-2xl font-bold mb-4">Adicionar Nova Entrada</h2>
@@ -87,8 +110,6 @@
                 </form>
             </div>
         </div>
-
-        <!-- Modal para Definir Salário -->
         <div id="salaryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4">
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
                 <h2 class="text-2xl font-bold mb-4">Definir Salário Mensal</h2>
@@ -104,8 +125,6 @@
                 </form>
             </div>
         </div>
-
-        <!-- Modal para Adicionar Despesa -->
         <div id="expenseModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4">
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
                 <h2 class="text-2xl font-bold mb-4">Adicionar Nova Despesa</h2>
@@ -125,21 +144,17 @@
                 </form>
             </div>
         </div>
-
-        <!-- Modal Genérico para Alertas e Confirmações -->
         <div id="infoModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4">
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in text-center">
                 <h2 id="infoModalTitle" class="text-2xl font-bold mb-4">Aviso</h2>
                 <p id="infoModalMessage" class="mb-6 text-gray-600 dark:text-gray-300">Mensagem de exemplo.</p>
-                <div id="infoModalActions" class="flex justify-center gap-3">
-                </div>
+                <div id="infoModalActions" class="flex justify-center gap-3"></div>
             </div>
         </div>
 
     </div>
 
     <script>
-        // Elementos do DOM
         const balanceEl = document.getElementById('balance');
         const transactionListEl = document.getElementById('transaction-list');
         const noTransactionsEl = document.getElementById('no-transactions');
@@ -148,20 +163,15 @@
         const expenseForm = document.getElementById('expense-form');
         const expenseDescriptionInput = document.getElementById('expense-description');
         const expenseAmountInput = document.getElementById('expense-amount');
-        // Novos elementos para a entrada de valores (NOVO)
         const incomeForm = document.getElementById('income-form');
         const incomeDescriptionInput = document.getElementById('income-description');
         const incomeAmountInput = document.getElementById('income-amount');
-
-        // Estado da aplicação
         let transactions = [];
         let storageError = false;
 
-        // Funções de Modal
         function openModal(modalId) { document.getElementById(modalId).classList.remove('hidden'); }
         function closeModal(modalId) { document.getElementById(modalId).classList.add('hidden'); }
 
-        // Funções do Modal de Informação/Confirmação
         const infoModal = document.getElementById('infoModal');
         const infoModalTitle = document.getElementById('infoModalTitle');
         const infoModalMessage = document.getElementById('infoModalMessage');
@@ -173,7 +183,6 @@
             infoModalActions.innerHTML = `<button type="button" onclick="closeInfoModal()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full">OK</button>`;
             infoModal.classList.remove('hidden');
         }
-
         function showConfirm(message, onConfirm, title = 'Confirmação') {
             infoModalTitle.textContent = title;
             infoModalMessage.textContent = message;
@@ -182,31 +191,20 @@
                 <button type="button" id="confirmBtn" class="px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors">Confirmar</button>
             `;
             infoModal.classList.remove('hidden');
-            
             const confirmBtn = document.getElementById('confirmBtn');
-            confirmBtn.onclick = () => {
-                onConfirm();
-                closeInfoModal();
-            };
+            confirmBtn.onclick = () => { onConfirm(); closeInfoModal(); };
         }
-
         function closeInfoModal() { infoModal.classList.add('hidden'); }
-        
         function formatCurrency(value) { return new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(value); }
 
         function updateBalance() {
-            const balance = transactions.reduce((acc, transaction) => acc + transaction.amount, 0);
+            const balance = transactions.reduce((acc, t) => acc + t.amount, 0);
             balanceEl.textContent = formatCurrency(balance);
             balanceEl.classList.remove('text-green-500', 'text-red-500', 'text-gray-800', 'dark:text-gray-200');
-            if (balance > 0) {
-                balanceEl.classList.add('text-green-500');
-            } else if (balance < 0) {
-                balanceEl.classList.add('text-red-500');
-            } else {
-                 balanceEl.classList.add('text-gray-800', 'dark:text-gray-200');
-            }
+            if (balance > 0) balanceEl.classList.add('text-green-500');
+            else if (balance < 0) balanceEl.classList.add('text-red-500');
+            else balanceEl.classList.add('text-gray-800', 'dark:text-gray-200');
         }
-        
         function addTransactionDOM(transaction) {
             const item = document.createElement('li');
             item.classList.add('flex', 'justify-between', 'items-center', 'p-3', 'rounded-lg', 'fade-in');
@@ -228,9 +226,9 @@
             `;
             transactionListEl.appendChild(item);
         }
-
         function updateTransactionList() {
             transactionListEl.innerHTML = '';
+            transactions.sort((a, b) => b.timestamp - a.timestamp); // Ordena as transações, as mais recentes primeiro
             if (transactions.length === 0 && !storageError) {
                 noTransactionsEl.classList.remove('hidden');
             } else {
@@ -238,99 +236,106 @@
                 transactions.forEach(addTransactionDOM);
             }
         }
-
         function saveTransactions() {
             if (storageError) return;
             localStorage.setItem('transactions', JSON.stringify(transactions));
         }
-        
-        function generateID() { return Date.now() + Math.random(); } // Improved ID generation
+        function generateID() { return Date.now() + Math.random(); }
 
-        // Nova função para adicionar entradas (NOVO)
         function addIncome(e) {
             e.preventDefault();
             const description = incomeDescriptionInput.value.trim();
             const amount = parseFloat(incomeAmountInput.value);
-
             if (description === '' || isNaN(amount) || amount <= 0) {
-                showAlert('Por favor, preencha a descrição e um valor válido.');
-                return;
+                showAlert('Por favor, preencha a descrição e um valor válido.'); return;
             }
-
-            const transaction = {
-                id: generateID(),
-                description: description,
-                amount: amount // O valor é positivo
-            };
-            transactions.push(transaction);
-            
-            init();
-            saveTransactions();
-            incomeDescriptionInput.value = '';
-            incomeAmountInput.value = '';
-            closeModal('incomeModal');
+            transactions.push({ id: generateID(), description, amount, timestamp: Date.now() });
+            init(); saveTransactions();
+            incomeDescriptionInput.value = ''; incomeAmountInput.value = ''; closeModal('incomeModal');
         }
-
         function setSalary(e) {
             e.preventDefault();
             const amount = parseFloat(salaryAmountInput.value);
             if (isNaN(amount) || amount <= 0) {
-                showAlert('Por favor, insira um valor de salário válido.');
-                return;
+                showAlert('Por favor, insira um valor de salário válido.'); return;
             }
-            
             transactions = transactions.filter(t => t.description !== 'Salário Inicial');
-            const transaction = {
-                id: generateID(),
-                description: 'Salário Inicial',
-                amount: amount
-            };
-            transactions.unshift(transaction);
-            
-            init();
-            saveTransactions();
-            salaryAmountInput.value = '';
-            closeModal('salaryModal');
+            transactions.unshift({ id: generateID(), description: 'Salário Inicial', amount, timestamp: Date.now() });
+            init(); saveTransactions();
+            salaryAmountInput.value = ''; closeModal('salaryModal');
         }
-        
         function addExpense(e) {
             e.preventDefault();
             const description = expenseDescriptionInput.value.trim();
             const amount = parseFloat(expenseAmountInput.value);
             if (description === '' || isNaN(amount) || amount <= 0) {
-                showAlert('Por favor, preencha a descrição e um valor válido.');
-                return;
+                showAlert('Por favor, preencha a descrição e um valor válido.'); return;
             }
-            const transaction = {
-                id: generateID(),
-                description: description,
-                amount: -amount // O valor é negativo
-            };
-            transactions.push(transaction);
-            
-            init();
-            saveTransactions();
-            expenseDescriptionInput.value = '';
-            expenseAmountInput.value = '';
-            closeModal('expenseModal');
+            transactions.push({ id: generateID(), description, amount: -amount, timestamp: Date.now() });
+            init(); saveTransactions();
+            expenseDescriptionInput.value = ''; expenseAmountInput.value = ''; closeModal('expenseModal');
         }
-
         function removeTransaction(id) {
-            transactions = transactions.filter(transaction => transaction.id !== id);
-            init();
-            saveTransactions();
+            transactions = transactions.filter(t => t.id !== id);
+            init(); saveTransactions();
         }
-
         function resetApp() {
-            showConfirm(
-                'Tem a certeza de que quer apagar todos os dados? Esta ação não pode ser desfeita.',
+            showConfirm('Tem a certeza de que quer apagar todos os dados? Esta ação não pode ser desfeita.',
                 () => {
                     transactions = [];
                     localStorage.removeItem('transactions');
                     init();
-                },
-                'Limpar Tudo'
+                }, 'Limpar Tudo'
             );
+        }
+
+        // Funções de Exportação
+        window.exportToCSV = function() {
+            closeModal('exportModal');
+            if (transactions.length === 0) { showAlert('Não há transações para exportar.'); return; }
+            const headers = ['Data', 'Descrição', 'Valor'];
+            const rows = transactions.map(t => [
+                new Date(t.timestamp).toLocaleDateString('pt-PT'),
+                `"${t.description.replace(/"/g, '""')}"`,
+                t.amount.toFixed(2).replace('.', ',')
+            ]);
+            
+            // CORREÇÃO: Adiciona um "BOM" para garantir a codificação correta (UTF-8) no Excel
+            const csvString = headers.join(';') + "\n" + rows.map(e => e.join(';')).join("\n");
+            const blob = new Blob(["\uFEFF" + csvString], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", "historico_financeiro.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        window.exportToPDF = function() {
+            closeModal('exportModal');
+            if (transactions.length === 0) { showAlert('Não há transações para exportar.'); return; }
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            const tableColumn = ["Data", "Descrição", "Valor (€)"];
+            const tableRows = [];
+            transactions.forEach(t => {
+                tableRows.push([ new Date(t.timestamp).toLocaleDateString('pt-PT'), t.description, t.amount.toFixed(2) ]);
+            });
+            const balance = transactions.reduce((acc, t) => acc + t.amount, 0);
+            
+            doc.autoTable({
+                head: [tableColumn],
+                body: tableRows,
+                startY: 20,
+                didDrawPage: function(data) {
+                    doc.text("Histórico Financeiro", 14, 15);
+                },
+                foot: [['', 'SALDO TOTAL', balance.toFixed(2)]],
+                footStyles: { fontStyle: 'bold' }
+            });
+            doc.save("historico_financeiro.pdf");
         }
 
         function init() {
@@ -338,8 +343,8 @@
             updateTransactionList();
         }
 
-        // Event Listeners
-        incomeForm.addEventListener('submit', addIncome); // NOVO
+        // Event Listeners e Inicialização
+        incomeForm.addEventListener('submit', addIncome);
         salaryForm.addEventListener('submit', setSalary);
         expenseForm.addEventListener('submit', addExpense);
         
@@ -351,10 +356,14 @@
             } catch (e) {
                 storageError = true;
                 console.error("LocalStorage não está disponível.", e);
-                // (O resto do tratamento de erro permanece o mesmo)
+                document.getElementById('btn-salary').disabled = true;
+                document.getElementById('btn-expense').disabled = true;
+                document.getElementById('btn-reset').disabled = true;
+                document.getElementById('btn-income').disabled = true;
             }
             init();
         });
     </script>
 </body>
 </html>
+

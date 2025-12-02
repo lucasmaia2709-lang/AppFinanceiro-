@@ -6,15 +6,13 @@
     <title>Gestor Financeiro Pessoal - Cloud</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Bibliotecas PDF (Versões Estáveis) -->
+    <!-- Bibliotecas PDF (Versões Estáveis e Leves) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script>
+        // Correção essencial para o gerador de PDF funcionar sempre
         window.jsPDF = window.jspdf.jsPDF;
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf-autotable.min.js"></script>
-    
-    <!-- Gráficos -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,6 +24,10 @@
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, query, onSnapshot, deleteDoc, doc, updateDoc, getDocs, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+        // ============================================================
+        // ÁREA DE CONFIGURAÇÃO
+        // ============================================================
+        
         const myFirebaseConfig = {
             apiKey: "AIzaSyDsG8yHgb9_KNX6Z1FUmUNCXEmme1ZhIFo",
             authDomain: "appfinanceiro-eaf7d.firebaseapp.com",
@@ -40,13 +42,15 @@
         const firebaseConfig = isConfigured ? myFirebaseConfig : JSON.parse(window.__firebase_config || '{}');
         const appId = window.__app_id || 'default-app'; 
 
+        // Inicialização
         let app, auth, db;
         try {
             app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
+            console.log("Firebase inicializado.");
         } catch (e) {
-            console.error("Erro Firebase:", e);
+            console.error("Erro ao inicializar Firebase:", e);
         }
         
         let currentUser = null;
@@ -120,6 +124,8 @@
                     let msg = 'Erro de autenticação.';
                     if(error.code === 'auth/invalid-credential') msg = 'Dados incorretos ou conta inexistente.';
                     else if(error.code === 'auth/email-already-in-use') msg = 'Este email já está registado.';
+                    else if(error.code === 'auth/wrong-password') msg = 'Senha incorreta.';
+                    else if(error.code === 'auth/user-not-found') msg = 'Utilizador não encontrado.';
                     
                     showAlert(msg, "Erro");
                 }
@@ -131,7 +137,7 @@
 
         window.logout = () => signOut(auth);
 
-        // --- Firestore ---
+        // --- Firestore Logic ---
         function handleFirestoreError(error) {
             console.error("Firestore:", error);
             if (error.code === 'permission-denied') showAlert("Permissão negada. Verifique as Regras no Firebase.", "Erro");
@@ -144,7 +150,7 @@
                 transactions = [];
                 snapshot.forEach((doc) => transactions.push({ id: doc.id, ...doc.data() }));
                 updateUI();
-                window.transactions = transactions;
+                window.transactions = transactions; // Sync global para exportação
             }, handleFirestoreError);
         }
 
@@ -281,207 +287,7 @@
             closeModal('editModal');
         };
 
-        // --- RELATÓRIO LOCAL E GRÁFICOS ---
-
-        function createChart(canvasId, config) {
-            const canvas = document.getElementById(canvasId);
-            const ctx = canvas.getContext('2d');
-            if(window[canvasId] instanceof Chart) window[canvasId].destroy();
-            window[canvasId] = new Chart(ctx, config);
-        }
-
-        window.generateLocalReport = async (e) => {
-            e.preventDefault();
-            const startStr = document.getElementById('report-start').value;
-            const endStr = document.getElementById('report-end').value;
-            
-            if(!startStr || !endStr) return showAlert("Selecione as datas.");
-            const start = new Date(startStr);
-            const end = new Date(endStr);
-            end.setHours(23, 59, 59); 
-
-            const filteredData = transactions.filter(t => {
-                const tDate = new Date(t.timestamp);
-                return tDate >= start && tDate <= end;
-            });
-
-            if(filteredData.length === 0) return showAlert("Sem dados neste período.");
-
-            toggleLoading(true);
-            const btn = document.getElementById('btn-generate-report');
-            const originalText = btn.textContent;
-            btn.textContent = "A gerar...";
-            btn.disabled = true;
-
-            try {
-                // 1. Cálculos Locais
-                const income = filteredData.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
-                const expense = Math.abs(filteredData.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
-                const savings = income - expense;
-                
-                const expensesMap = {};
-                filteredData.filter(t=>t.amount<0).forEach(t => {
-                    const k = t.description.trim();
-                    expensesMap[k] = (expensesMap[k] || 0) + Math.abs(t.amount);
-                });
-                const sortedExpenses = Object.entries(expensesMap).sort((a,b)=>b[1]-a[1]);
-                
-                // Timeline
-                const timelineMap = {};
-                filteredData.sort((a,b)=>a.timestamp-b.timestamp).forEach(t=>{
-                    const day = new Date(t.timestamp).toLocaleDateString('pt-PT', {day:'2-digit', month:'2-digit'});
-                    if (!timelineMap[day]) timelineMap[day] = 0;
-                    timelineMap[day] += t.amount;
-                });
-                let acc = 0;
-                const timelineLabels = Object.keys(timelineMap);
-                const timelineData = Object.values(timelineMap).map(val => { acc += val; return acc; });
-
-                // 2. Gráficos
-                createChart('chartLine', {
-                    type: 'line',
-                    data: {
-                        labels: timelineLabels,
-                        datasets: [{
-                            label: 'Evolução',
-                            data: timelineData,
-                            borderColor: '#2563eb',
-                            backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                            borderWidth: 3,
-                            fill: true,
-                            tension: 0.3
-                        }]
-                    },
-                    options: { 
-                        responsive: false, animation: false, 
-                        devicePixelRatio: 2, 
-                        plugins: { legend: { display: false } },
-                        scales: { y: { beginAtZero: false } }
-                    }
-                });
-
-                const top5 = sortedExpenses.slice(0, 5);
-                const otherTotal = sortedExpenses.slice(5).reduce((acc, curr) => acc + curr[1], 0);
-                if(otherTotal > 0) top5.push(['Outros', otherTotal]);
-
-                createChart('chartDoughnut', {
-                    type: 'doughnut',
-                    data: {
-                        labels: top5.map(e => e[0]),
-                        datasets: [{
-                            data: top5.map(e => e[1]),
-                            backgroundColor: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#06b6d4', '#64748b'],
-                            borderWidth: 0
-                        }]
-                    },
-                    options: { 
-                        responsive: false, 
-                        animation: false, 
-                        devicePixelRatio: 2,
-                        plugins: { legend: { position: 'right', labels: { font: { size: 14 } } } } 
-                    }
-                });
-
-                await new Promise(r => setTimeout(r, 800));
-
-                // 3. PDF
-                const doc = new window.jsPDF(); 
-                const pageWidth = doc.internal.pageSize.getWidth();
-                
-                doc.setFillColor(30, 58, 138);
-                doc.rect(0, 0, pageWidth, 40, 'F');
-                
-                doc.setTextColor(255, 255, 255);
-                doc.setFont("helvetica", "bold");
-                doc.setFontSize(22);
-                doc.text("RELATÓRIO FINANCEIRO", pageWidth / 2, 20, { align: "center" });
-                
-                doc.setFont("helvetica", "normal");
-                doc.setFontSize(10);
-                doc.text(`${start.toLocaleDateString('pt-PT')} a ${end.toLocaleDateString('pt-PT')}`, pageWidth / 2, 30, { align: "center" });
-
-                let cursorY = 55;
-
-                // Resumo Texto
-                doc.setTextColor(30, 58, 138);
-                doc.setFontSize(14);
-                doc.setFont("helvetica", "bold");
-                doc.text("1. RESUMO GERAL", 14, cursorY);
-                cursorY += 10;
-
-                doc.setTextColor(50, 50, 50);
-                doc.setFontSize(12);
-                doc.setFont("helvetica", "normal");
-                
-                const topName = sortedExpenses[0]?.[0] || 'Nenhuma';
-                const topVal = sortedExpenses[0]?.[1] || 0;
-                
-                const summaryText = `Receitas Totais: ${formatCurrency(income)}\n` +
-                                  `Despesas Totais: ${formatCurrency(expense)}\n` +
-                                  `Saldo Líquido: ${formatCurrency(savings)}\n\n` +
-                                  `Maior Categoria de Gasto: ${topName} (${formatCurrency(topVal)})`;
-                
-                const splitText = doc.splitTextToSize(summaryText, 180);
-                doc.text(splitText, 14, cursorY);
-                cursorY += 40;
-
-                // Gráficos
-                doc.setTextColor(30, 58, 138);
-                doc.setFontSize(14);
-                doc.setFont("helvetica", "bold");
-                doc.text("2. GRÁFICOS", 14, cursorY);
-                cursorY += 10;
-
-                try {
-                    const lineImg = document.getElementById('chartLine').toDataURL("image/png", 1.0);
-                    doc.addImage(lineImg, 'PNG', 15, cursorY, 180, 80);
-                    cursorY += 90;
-                } catch(e) {}
-
-                if (cursorY > 200) { doc.addPage(); cursorY = 20; }
-
-                try {
-                    const doughnutImg = document.getElementById('chartDoughnut').toDataURL("image/png", 1.0);
-                    doc.addImage(doughnutImg, 'PNG', 40, cursorY, 130, 70); 
-                    cursorY += 80;
-                } catch(e) {}
-
-                if (cursorY > 250) { doc.addPage(); cursorY = 20; }
-
-                doc.setTextColor(30, 58, 138);
-                doc.setFontSize(14);
-                doc.setFont("helvetica", "bold");
-                doc.text("3. EXTRATO DETALHADO", 14, cursorY);
-                cursorY += 10;
-
-                if (typeof doc.autoTable === 'function') {
-                    doc.autoTable({
-                        head: [['Data', 'Descrição', 'Valor (€)']],
-                        body: filteredData.map(t => [
-                            new Date(t.timestamp).toLocaleDateString('pt-PT'),
-                            t.description,
-                            formatCurrency(Math.abs(t.amount))
-                        ]),
-                        startY: cursorY,
-                        theme: 'grid',
-                        headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
-                        columnStyles: { 2: { halign: 'right' } }
-                    });
-                }
-
-                doc.save(`relatorio_${Date.now()}.pdf`);
-                closeModal('reportModal');
-
-            } catch (err) {
-                console.error(err);
-                showAlert("Erro técnico ao gerar PDF.");
-            } finally {
-                toggleLoading(false);
-                btn.textContent = originalText;
-                btn.disabled = false;
-            }
-        };
-
+        // --- Funções de Interface ---
         window.toggleHistory = () => {
             const el = document.getElementById('history-container');
             const icon = document.getElementById('history-arrow');
@@ -512,31 +318,79 @@
             infoModal.classList.remove('hidden');
         };
 
-        // Exportação Simples CORRIGIDA
+        // --- Exportação ---
+        
+        // 1. Exportar para Excel (CSV)
         window.exportToCSV = () => {
-            if(!transactions.length) return showAlert("Sem dados.");
-            const csv = ['Data;Descrição;Valor'].concat(
-                transactions.map(t => `${new Date(t.timestamp).toLocaleDateString()};"${t.description}";${t.amount.toFixed(2)}`)
-            ).join('\n');
-            const blob = new Blob(["\uFEFF"+csv], {type:'text/csv;charset=utf-8;'});
+            if(!transactions.length) return showAlert("Não há dados para exportar.");
+            
+            // Cria o conteúdo CSV com BOM para suportar acentos no Excel
+            const headers = ['Data;Descrição;Valor (€)'];
+            const rows = transactions.map(t => 
+                `${new Date(t.timestamp).toLocaleDateString('pt-PT')};"${t.description.replace(/"/g, '""')}";${t.amount.toFixed(2).replace('.', ',')}`
+            );
+            
+            const csvContent = headers.concat(rows).join('\n');
+            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+            
             const url = URL.createObjectURL(blob);
-            const a = document.createElement('a'); a.href = url; a.download='dados.csv';
-            a.click();
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `meu_saldo_${new Date().toISOString().split('T')[0]}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         };
 
+        // 2. Exportar para PDF (Simples e Limpo)
         window.exportToPDF = () => {
-            if(!transactions.length) return showAlert("Sem dados.");
-            const doc = new window.jsPDF();
-            doc.text("Extrato Simples", 14, 15);
+            if(!transactions.length) return showAlert("Não há dados para exportar.");
+            
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            // Cabeçalho PDF
+            doc.setFontSize(18);
+            doc.setTextColor(37, 99, 235); // Azul
+            doc.text("Extrato Financeiro", 14, 20);
+            
+            doc.setFontSize(10);
+            doc.setTextColor(100);
+            doc.text(`Gerado em: ${new Date().toLocaleDateString('pt-PT')}`, 14, 28);
+
+            // Resumo
+            const total = transactions.reduce((acc, t) => acc + t.amount, 0);
+            const income = transactions.filter(t => t.amount > 0).reduce((acc, t) => acc + t.amount, 0);
+            const expense = transactions.filter(t => t.amount < 0).reduce((acc, t) => acc + t.amount, 0);
+
+            doc.setFontSize(12);
+            doc.setTextColor(0);
+            doc.text(`Receitas: ${formatCurrency(income)}  |  Despesas: ${formatCurrency(Math.abs(expense))}`, 14, 40);
+            
+            doc.setFont("helvetica", "bold");
+            if (total >= 0) doc.setTextColor(0, 150, 0); else doc.setTextColor(200, 0, 0);
+            doc.text(`Saldo Final: ${formatCurrency(total)}`, 14, 48);
+
+            // Tabela
+            const tableRows = transactions.map(t => [
+                new Date(t.timestamp).toLocaleDateString('pt-PT'),
+                t.description,
+                formatCurrency(t.amount)
+            ]);
+
             doc.autoTable({
                 head: [['Data', 'Descrição', 'Valor']],
-                body: transactions.map(t => [
-                    new Date(t.timestamp).toLocaleDateString(), t.description, t.amount.toFixed(2)+'€'
-                ])
+                body: tableRows,
+                startY: 55,
+                theme: 'striped',
+                headStyles: { fillColor: [37, 99, 235] },
+                columnStyles: { 2: { halign: 'right' } } // Alinha valores à direita
             });
-            doc.save('extrato.pdf');
-        };
 
+            doc.save(`extrato_financeiro_${Date.now()}.pdf`);
+            closeModal('exportModal');
+        };
+        
         window.deleteTransaction = deleteTransactionFromDB;
         window.transactions = transactions;
     </script>
@@ -551,15 +405,10 @@
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 flex items-center justify-center min-h-screen relative">
 
+    <!-- Loading Overlay -->
     <div id="loading-overlay" class="fixed inset-0 bg-white/90 dark:bg-gray-900/90 z-[100] flex flex-col items-center justify-center">
         <div class="loader mb-4"></div>
         <p class="text-gray-600 dark:text-gray-300 font-medium">A carregar...</p>
-    </div>
-
-    <!-- Canvas Escondido para PDF -->
-    <div style="position: absolute; left: -9999px;">
-        <canvas id="chartLine" width="1200" height="500"></canvas>
-        <canvas id="chartDoughnut" width="800" height="600"></canvas>
     </div>
 
     <!-- AUTH -->
@@ -581,40 +430,45 @@
 
     <!-- APP PRINCIPAL -->
     <div id="app-container" class="w-full max-w-md mx-auto p-4 md:p-6 hidden fade-in">
+        
         <header class="flex justify-between items-start mb-6">
             <div>
                 <h1 class="text-3xl font-bold text-blue-600 dark:text-blue-400">Meu Saldo</h1>
                 <p class="text-xs text-gray-400 mt-1">Conta: <span id="user-info">...</span></p>
             </div>
             <div class="flex gap-2">
-                <button onclick="openModal('reportModal')" class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-sm font-medium hover:bg-indigo-200 transition">Relatório PDF</button>
+                <button onclick="openModal('exportModal')" class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-sm font-medium hover:bg-indigo-200 transition flex items-center gap-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Exportar
+                </button>
                 <button onclick="logout()" class="bg-gray-200 text-gray-600 px-3 py-1 rounded-lg text-sm hover:bg-red-100 hover:text-red-600 transition">Sair</button>
             </div>
         </header>
         
         <main class="space-y-6">
+            <!-- Card do Saldo Disponível -->
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 text-center relative overflow-hidden">
                 <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-green-500"></div>
-                <h2 class="text-lg font-medium text-gray-500 mb-2">Saldo Disponível</h2>
+                <h2 class="text-lg font-medium text-gray-500 dark:text-gray-400 mb-2">Saldo Disponível</h2>
                 <p id="balance" class="text-5xl font-bold tracking-tight">...</p>
             </div>
 
+            <!-- Botões de Ação -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <button onclick="openModal('incomeModal')" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl shadow-md">Entrada</button>
                 <button onclick="openModal('expenseModal')" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-4 rounded-xl shadow-md">Despesa</button>
                 <button onclick="openModal('salaryModal')" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-xl shadow-md">Salário</button>
             </div>
 
+            <!-- Histórico -->
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
                 <div class="flex justify-between items-center cursor-pointer select-none" onclick="toggleHistory()">
                     <div class="flex items-center gap-2">
                         <h3 class="text-xl font-semibold">Histórico</h3>
                         <svg id="history-arrow" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform duration-300"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </div>
-                    <div class="flex gap-2" onclick="event.stopPropagation()">
-                         <button onclick="openModal('exportModal')" class="text-sm text-blue-500 font-medium">Exportar</button>
-                         <button onclick="resetApp()" class="text-sm text-gray-400 hover:text-red-500">Limpar</button>
-                    </div>
+                    <!-- Botão Limpar movido para cá para acesso rápido, já que exportar está no topo -->
+                    <button onclick="resetApp(); event.stopPropagation();" class="text-sm text-gray-400 hover:text-red-500 transition-colors">Limpar Tudo</button>
                 </div>
                 <div id="history-container" class="hidden mt-4 border-t pt-2">
                     <ul id="transaction-list" class="space-y-3 max-h-80 overflow-y-auto pr-2">
@@ -681,28 +535,19 @@
             </div>
         </div>
 
-        <div id="reportModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm">
-                <h2 class="text-2xl font-bold mb-4 text-indigo-600">Relatório PDF</h2>
-                <form onsubmit="generateLocalReport(event)">
-                    <label class="block text-sm mb-1">Início</label>
-                    <input type="date" id="report-start" required class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
-                    <label class="block text-sm mb-1">Fim</label>
-                    <input type="date" id="report-end" required class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
-                    <div class="flex justify-end gap-2">
-                        <button type="button" onclick="closeModal('reportModal')" class="px-4 py-2 bg-gray-200 rounded-lg">Cancelar</button>
-                        <button type="submit" id="btn-generate-report" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Gerar PDF</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
+        <!-- Export Modal (Simplificado) -->
         <div id="exportModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
             <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm text-center">
-                <h2 class="text-2xl font-bold mb-6">Exportar</h2>
+                <h2 class="text-2xl font-bold mb-6">Como deseja exportar?</h2>
                 <div class="space-y-4">
-                    <button onclick="exportToCSV()" class="w-full bg-green-600 text-white font-bold py-3 rounded-xl">CSV</button>
-                    <button onclick="exportToPDF()" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl">PDF Simples</button>
+                    <button onclick="exportToCSV()" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                        Excel (CSV)
+                    </button>
+                    <button onclick="exportToPDF()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                        Documento PDF
+                    </button>
                 </div>
                 <button onclick="closeModal('exportModal')" class="mt-6 text-gray-500">Cancelar</button>
             </div>

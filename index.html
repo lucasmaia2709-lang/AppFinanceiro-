@@ -6,16 +6,14 @@
     <title>Gestor Financeiro Pessoal - Cloud</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Bibliotecas PDF (Versões Estáveis e Compatíveis) -->
+    <!-- Bibliotecas PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script>
-        // Shim crítico: Garante que o jsPDF está acessível globalmente para o plugin
         window.jsPDF = window.jspdf.jsPDF;
     </script>
-    <!-- Usando a versão 3.5.23 do autotable para máxima compatibilidade -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf-autotable.min.js"></script>
     
-    <!-- Gráficos -->
+    <!-- Gráficos (Chart.js) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -98,8 +96,6 @@
                 }
                 toggleLoading(false);
             });
-        } else {
-            showAlert("Erro crítico: Firebase não inicializado. Verifique a consola.");
         }
 
         let isLoginMode = true; 
@@ -382,7 +378,16 @@
             closeModal('editModal');
         }
 
-        // --- RELATÓRIO IA & Gráficos ---
+        // --- RELATÓRIO IA PROFISSIONAL ---
+
+        // Função auxiliar para criar gráficos em Canvas invisíveis de alta resolução
+        const createChart = (canvasId, config) => {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            // Destroi anterior se existir
+            if (window[canvasId] instanceof Chart) window[canvasId].destroy();
+            window[canvasId] = new Chart(ctx, config);
+            return window[canvasId];
+        };
 
         window.generateAIReport = async (e) => {
             e.preventDefault();
@@ -392,6 +397,7 @@
 
             if(isNaN(startDate) || isNaN(endDate)) return showAlert("Datas inválidas.");
 
+            // 1. Filtrar e Preparar Dados
             const filteredData = transactions.filter(t => {
                 const tDate = new Date(t.timestamp);
                 return tDate >= startDate && tDate <= endDate;
@@ -402,25 +408,42 @@
             toggleLoading(true);
             const btn = document.getElementById('btn-generate-report');
             const originalText = btn.textContent;
-            btn.textContent = "A analisar...";
+            btn.textContent = "A gerar relatório...";
             btn.disabled = true;
 
             try {
-                // 1. Preparar Dados Locais (O "Plano B")
+                // Preparar dados agregados para a IA e Gráficos
                 const income = filteredData.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
                 const expense = Math.abs(filteredData.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
                 const savings = income - expense;
                 
-                // Categorias para gráfico e texto
+                // Agrupamento por Categoria (Descrição)
                 const expensesMap = {};
                 filteredData.filter(t=>t.amount<0).forEach(t => {
-                    const k = t.description;
+                    const k = t.description.trim();
                     expensesMap[k] = (expensesMap[k] || 0) + Math.abs(t.amount);
                 });
-                const sortedExpenses = Object.entries(expensesMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
-                const topExpense = sortedExpenses.length > 0 ? sortedExpenses[0][0] : "Nenhuma";
+                // Ordenar despesas
+                const sortedExpenses = Object.entries(expensesMap).sort((a,b)=>b[1]-a[1]);
+                
+                // Preparar dados de Evolução Diária (Linha do Tempo)
+                const timelineMap = {};
+                // Preencher dias vazios com 0 seria ideal, mas simplificamos com dias existentes
+                filteredData.sort((a,b) => a.timestamp - b.timestamp).forEach(t => {
+                    const day = new Date(t.timestamp).toLocaleDateString('pt-PT', {day: '2-digit', month: '2-digit'});
+                    if (!timelineMap[day]) timelineMap[day] = 0;
+                    timelineMap[day] += t.amount;
+                });
+                
+                // Acumulado
+                let accBalance = 0;
+                const timelineLabels = Object.keys(timelineMap);
+                const timelineData = Object.values(timelineMap).map(val => {
+                    accBalance += val;
+                    return accBalance;
+                });
 
-                // 2. Tentar IA (Cloudflare)
+                // 2. Chamar IA (Worker)
                 let aiAnalysisText = "";
                 let usedFallback = false;
                 
@@ -429,125 +452,196 @@
                         const response = await fetch(window.AI_API_URL, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ transactions: filteredData, start: startDate, end: endDate })
+                            body: JSON.stringify({ 
+                                transactions: filteredData, 
+                                start: startDate.toISOString().split('T')[0], 
+                                end: endDate.toISOString().split('T')[0],
+                                // Enviamos totais pré-calculados para ajudar a IA
+                                summary: { income, expense, savings, topExpenses: sortedExpenses.slice(0, 5) }
+                            })
                         });
                         
                         if (!response.ok) throw new Error("Erro HTTP");
-                        
                         const data = await response.json();
-                        
-                        // Verifica se a resposta é um erro disfarçado
-                        if (!data.analysis || data.analysis.includes("Erro") || data.analysis.includes("Não foi possível")) {
-                            throw new Error("IA retornou erro ou vazio");
-                        }
-                        
                         aiAnalysisText = data.analysis;
                     } catch (err) {
-                        console.warn("Falha na IA, usando resumo local:", err);
+                        console.warn("Falha na IA:", err);
                         usedFallback = true;
                     }
                 } else {
                     usedFallback = true;
                 }
 
-                // 3. Fallback: Se a IA falhou, gera texto localmente
+                // Fallback robusto
                 if (usedFallback || !aiAnalysisText) {
-                    aiAnalysisText = `RELATÓRIO AUTOMÁTICO (IA Indisponível):\n\n` +
-                        `No período selecionado, o total de receitas foi de ${formatCurrency(income)} e as despesas somaram ${formatCurrency(expense)}.\n\n` +
-                        `O resultado final é um saldo de ${formatCurrency(savings)}.\n` +
-                        `A categoria onde gastou mais dinheiro foi "${topExpense}".\n\n` +
-                        `Nota: Verifique a configuração da API Cloudflare (Chave API) para obter análises detalhadas da Inteligência Artificial.`;
+                    aiAnalysisText = `RESUMO EXECUTIVO (Modo Offline):\n\n` +
+                        `No período analisado, registou-se um total de receitas de ${formatCurrency(income)} contra despesas de ${formatCurrency(expense)}, resultando num saldo líquido de ${formatCurrency(savings)}.\n\n` +
+                        `A maior fonte de despesa foi "${sortedExpenses[0]?.[0] || 'N/A'}" com ${formatCurrency(sortedExpenses[0]?.[1] || 0)}. ` +
+                        `Recomenda-se monitorizar estes gastos recorrentes para otimizar o fluxo de caixa até ao final do mês.\n\n` +
+                        `Sugestão: Tente reduzir em 10% os gastos variáveis na categoria "${sortedExpenses[0]?.[0] || 'N/A'}" para aumentar a sua margem de segurança.`;
                 }
 
-                // 4. Gerar Gráficos
-                const ctxBar = document.getElementById('chartBar').getContext('2d');
-                if(window.myBarChart) window.myBarChart.destroy();
-                window.myBarChart = new Chart(ctxBar, {
-                    type: 'bar',
+                // 3. Renderizar Gráficos "Nobel" (Alta Resolução)
+                
+                // Gráfico 1: Evolução do Saldo (Linha)
+                createChart('chartLine', {
+                    type: 'line',
                     data: {
-                        labels: ['Entradas', 'Saídas'],
-                        datasets: [{ label: 'Valores (€)', data: [income, expense], backgroundColor: ['#22c55e', '#ef4444'] }]
+                        labels: timelineLabels,
+                        datasets: [{
+                            label: 'Evolução do Saldo',
+                            data: timelineData,
+                            borderColor: '#2563eb', // Blue-600
+                            backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4
+                        }]
                     },
-                    options: { responsive: false, animation: false, plugins: { legend: { display: false } } }
+                    options: { responsive: false, animation: false, plugins: { legend: { display: false } }, scales: { x: { display: true }, y: { display: true } } }
                 });
 
-                const ctxPie = document.getElementById('chartPie').getContext('2d');
-                if(window.myPieChart) window.myPieChart.destroy();
-                window.myPieChart = new Chart(ctxPie, {
+                // Gráfico 2: Top 5 Despesas (Doughnut Profissional)
+                const top5 = sortedExpenses.slice(0, 5);
+                const otherTotal = sortedExpenses.slice(5).reduce((acc, curr) => acc + curr[1], 0);
+                if(otherTotal > 0) top5.push(['Outros', otherTotal]);
+
+                createChart('chartDoughnut', {
                     type: 'doughnut',
                     data: {
-                        labels: sortedExpenses.map(e=>e[0]),
-                        datasets: [{ data: sortedExpenses.map(e=>e[1]), backgroundColor: ['#ef4444', '#f87171', '#fca5a5', '#fee2e2', '#e5e7eb'] }]
+                        labels: top5.map(e => e[0]),
+                        datasets: [{
+                            data: top5.map(e => e[1]),
+                            backgroundColor: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#06b6d4', '#64748b'],
+                            borderWidth: 0
+                        }]
                     },
-                    options: { responsive: false, animation: false }
+                    options: { 
+                        responsive: false, 
+                        animation: false, 
+                        cutout: '60%',
+                        plugins: { legend: { position: 'right', labels: { font: { size: 14 } } } } 
+                    }
                 });
 
-                await new Promise(r => setTimeout(r, 500));
+                // Pequeno delay para renderização dos Canvas
+                await new Promise(r => setTimeout(r, 800));
 
-                // 5. Gerar PDF
-                const { jsPDF } = window.jspdf;
-                const doc = new jsPDF(); 
+                // 4. Gerar PDF Profissional
+                const doc = new window.jsPDF(); 
+                const pageWidth = doc.internal.pageSize.getWidth();
                 
-                // Cabeçalho
-                doc.setFillColor(37, 99, 235); // Azul
-                doc.rect(0, 0, 210, 20, 'F');
-                doc.setFontSize(18);
+                // -- CAPA / CABEÇALHO --
+                doc.setFillColor(30, 58, 138); // Dark Blue Header
+                doc.rect(0, 0, pageWidth, 40, 'F');
+                
                 doc.setTextColor(255, 255, 255);
-                doc.text("Relatório Financeiro", 14, 13);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(22);
+                doc.text("RELATÓRIO FINANCEIRO EXECUTIVO", pageWidth / 2, 20, { align: "center" });
                 
+                doc.setFont("helvetica", "normal");
                 doc.setFontSize(10);
-                doc.setTextColor(100);
-                doc.text(`Período: ${startDate.toLocaleDateString('pt-PT')} a ${endDate.toLocaleDateString('pt-PT')}`, 14, 30);
+                doc.text(`Período de Análise: ${startDate.toLocaleDateString('pt-PT')} a ${endDate.toLocaleDateString('pt-PT')}`, pageWidth / 2, 30, { align: "center" });
 
-                // Texto de Análise
-                doc.setFontSize(12);
-                doc.setTextColor(0);
-                doc.text("Resumo Financeiro", 14, 40);
+                let cursorY = 55;
+
+                // -- SECÇÃO 1: RESUMO IA --
+                doc.setTextColor(30, 58, 138);
+                doc.setFontSize(14);
+                doc.setFont("helvetica", "bold");
+                doc.text("1. ANÁLISE DE INTELIGÊNCIA ARTIFICIAL", 14, cursorY);
+                cursorY += 8;
+
+                doc.setTextColor(50, 50, 50);
+                doc.setFontSize(11);
+                doc.setFont("helvetica", "normal");
+                const splitAnalysis = doc.splitTextToSize(aiAnalysisText, 180);
+                doc.text(splitAnalysis, 14, cursorY);
                 
+                cursorY += (splitAnalysis.length * 6) + 15;
+
+                // -- SECÇÃO 2: GRÁFICOS --
+                doc.setTextColor(30, 58, 138);
+                doc.setFontSize(14);
+                doc.setFont("helvetica", "bold");
+                doc.text("2. VISUALIZAÇÃO DE DADOS", 14, cursorY);
+                cursorY += 10;
+
+                // Título Gráfico 1
+                doc.setTextColor(80);
                 doc.setFontSize(10);
-                doc.setTextColor(60);
-                const splitText = doc.splitTextToSize(aiAnalysisText, 180);
-                doc.text(splitText, 14, 48);
+                doc.text("Evolução do Saldo Acumulado (€)", 14, cursorY);
+                cursorY += 5;
 
-                let currentY = 48 + (splitText.length * 5) + 15;
+                // Inserir Line Chart (Maior, panorâmico)
+                const lineImg = document.getElementById('chartLine').toDataURL("image/png", 1.0);
+                doc.addImage(lineImg, 'PNG', 14, cursorY, 180, 70);
+                cursorY += 80;
 
-                // Gráficos
-                doc.setFontSize(12);
-                doc.setTextColor(0);
-                doc.text("Gráficos", 14, currentY);
-                currentY += 5;
+                // Título Gráfico 2
+                doc.text("Distribuição de Despesas por Categoria", 14, cursorY);
+                cursorY += 5;
 
-                const barImg = document.getElementById('chartBar').toDataURL("image/png");
-                const pieImg = document.getElementById('chartPie').toDataURL("image/png");
+                // Inserir Doughnut Chart
+                const doughnutImg = document.getElementById('chartDoughnut').toDataURL("image/png", 1.0);
+                // Centralizar este gráfico
+                doc.addImage(doughnutImg, 'PNG', 40, cursorY, 130, 60); 
+                cursorY += 70;
 
-                doc.addImage(barImg, 'PNG', 14, currentY, 80, 50);
-                doc.addImage(pieImg, 'PNG', 110, currentY, 80, 50);
-                
-                currentY += 60;
+                // -- SECÇÃO 3: DETALHE DE TRANSAÇÕES --
+                // Nova página se não houver espaço
+                if (cursorY > 250) {
+                    doc.addPage();
+                    cursorY = 20;
+                }
 
-                // Tabela
-                const tableRows = filteredData.map(t => [
-                    new Date(t.timestamp).toLocaleDateString('pt-PT'),
-                    t.description,
-                    formatCurrency(t.amount)
-                ]);
+                doc.setTextColor(30, 58, 138);
+                doc.setFontSize(14);
+                doc.setFont("helvetica", "bold");
+                doc.text("3. DETALHE DE LANÇAMENTOS", 14, cursorY);
+                cursorY += 10;
 
                 if (typeof doc.autoTable === 'function') {
                     doc.autoTable({
-                        head: [['Data', 'Descrição', 'Valor']],
-                        body: tableRows,
-                        startY: currentY,
-                        theme: 'striped',
-                        headStyles: { fillColor: [37, 99, 235] }
+                        head: [['Data', 'Descrição', 'Tipo', 'Valor (€)']],
+                        body: filteredData.map(t => [
+                            new Date(t.timestamp).toLocaleDateString('pt-PT'),
+                            t.description,
+                            t.amount >= 0 ? 'Receita' : 'Despesa',
+                            formatCurrency(Math.abs(t.amount))
+                        ]),
+                        startY: cursorY,
+                        theme: 'grid',
+                        headStyles: { 
+                            fillColor: [30, 58, 138], 
+                            textColor: 255, 
+                            fontStyle: 'bold' 
+                        },
+                        alternateRowStyles: {
+                            fillColor: [240, 245, 255]
+                        },
+                        columnStyles: {
+                            3: { halign: 'right', fontStyle: 'bold' } // Valor alinhado à direita
+                        }
                     });
                 }
 
-                doc.save(`relatorio_${Date.now()}.pdf`);
+                // -- RODAPÉ --
+                const pageCount = doc.internal.getNumberOfPages();
+                for(let i = 1; i <= pageCount; i++) {
+                    doc.setPage(i);
+                    doc.setFontSize(8);
+                    doc.setTextColor(150);
+                    doc.text(`Gerado por Gestor Financeiro Cloud | Página ${i} de ${pageCount}`, pageWidth / 2, 290, { align: "center" });
+                }
+
+                doc.save(`relatorio_financeiro_${Date.now()}.pdf`);
                 closeModal('reportModal');
 
             } catch (err) {
                 console.error(err);
-                showAlert("Erro ao gerar relatório (PDF).");
+                showAlert("Erro técnico ao gerar PDF.");
             } finally {
                 toggleLoading(false);
                 btn.textContent = originalText;
@@ -653,10 +747,12 @@
         <p class="text-gray-600 dark:text-gray-300 font-medium">A carregar...</p>
     </div>
 
-    <!-- Canvas Oculto para Gráficos -->
+    <!-- Canvas Oculto para Gráficos de Alta Resolução -->
     <div style="position: absolute; left: -9999px;">
-        <canvas id="chartBar" width="400" height="250"></canvas>
-        <canvas id="chartPie" width="400" height="250"></canvas>
+        <!-- Line Chart: Maior para detalhe -->
+        <canvas id="chartLine" width="1200" height="500"></canvas>
+        <!-- Doughnut Chart: Quadrado -->
+        <canvas id="chartDoughnut" width="800" height="600"></canvas>
     </div>
 
     <!-- Container de Autenticação (OCULTO POR PADRÃO AGORA) -->

@@ -6,26 +6,18 @@
     <title>Gestor Financeiro Pessoal - Cloud</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Bibliotecas PDF e Gráficos -->
+    <!-- Bibliotecas PDF (Versões Estáveis e Compatíveis) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script>
+        // Shim crítico: Garante que o jsPDF está acessível globalmente para o plugin
+        window.jsPDF = window.jspdf.jsPDF;
+    </script>
+    <!-- Usando a versão 3.5.23 do autotable para máxima compatibilidade -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf-autotable.min.js"></script>
+    
+    <!-- Gráficos -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-    <!-- Shim de segurança para PDF (Evita travamento do app) -->
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            try {
-                if (window.jspdf && window.jspdf.jsPDF) {
-                    window.jsPDF = window.jspdf.jsPDF;
-                } else {
-                    console.warn('Biblioteca jsPDF não carregou corretamente.');
-                }
-            } catch (e) {
-                console.warn('Erro ao configurar PDF:', e);
-            }
-        });
-    </script>
-
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -67,8 +59,6 @@
             console.log("Firebase inicializado.");
         } catch (e) {
             console.error("Erro ao inicializar Firebase:", e);
-            document.getElementById('loading-overlay').classList.add('hidden'); // Força esconder loading se falhar
-            alert("Erro crítico na configuração do Firebase. Verifique a consola.");
         }
         
         let currentUser = null;
@@ -87,32 +77,19 @@
         const btnAuthSubmit = document.getElementById('btn-auth-submit');
 
         function toggleLoading(show) {
-            if (!loadingOverlay) return;
             if(show) loadingOverlay.classList.remove('hidden');
             else loadingOverlay.classList.add('hidden');
         }
-
-        // Timeout de segurança: Se o Firebase não responder em 5s, liberta a tela
-        setTimeout(() => {
-            if (!currentUser && !document.getElementById('auth-container').classList.contains('hidden') === false) {
-                // Se ainda está a carregar e não estamos no auth nem no app
-                console.warn("Timeout de carregamento do Firebase.");
-                toggleLoading(false);
-                authContainer.classList.remove('hidden'); // Mostra login por segurança
-            }
-        }, 8000);
 
         if (auth) {
             onAuthStateChanged(auth, (user) => {
                 currentUser = user;
                 if (user) {
-                    // Usuário logado
                     authContainer.classList.add('hidden');
                     appContainer.classList.remove('hidden');
                     userInfoEl.textContent = user.email;
                     setupRealtimeListener(user.uid);
                 } else {
-                    // Usuário deslogado
                     authContainer.classList.remove('hidden');
                     appContainer.classList.add('hidden');
                     if(unsubscribeTransactions) unsubscribeTransactions();
@@ -121,6 +98,8 @@
                 }
                 toggleLoading(false);
             });
+        } else {
+            showAlert("Erro crítico: Firebase não inicializado. Verifique a consola.");
         }
 
         let isLoginMode = true; 
@@ -163,7 +142,7 @@
                     showAlert("Cadastro concluído com sucesso! A entrar...", "Bem-vindo");
                 }
             } catch (error) {
-                if(auth.currentUser) return; // Se entrou entretanto, ignora erro
+                if(auth.currentUser) return;
 
                 if (error.code !== 'auth/invalid-credential' && error.code !== 'auth/wrong-password') {
                     console.error("Erro auth:", error.code, error.message);
@@ -427,7 +406,23 @@
             btn.disabled = true;
 
             try {
+                // 1. Preparar Dados Locais (O "Plano B")
+                const income = filteredData.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
+                const expense = Math.abs(filteredData.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
+                const savings = income - expense;
+                
+                // Categorias para gráfico e texto
+                const expensesMap = {};
+                filteredData.filter(t=>t.amount<0).forEach(t => {
+                    const k = t.description;
+                    expensesMap[k] = (expensesMap[k] || 0) + Math.abs(t.amount);
+                });
+                const sortedExpenses = Object.entries(expensesMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+                const topExpense = sortedExpenses.length > 0 ? sortedExpenses[0][0] : "Nenhuma";
+
+                // 2. Tentar IA (Cloudflare)
                 let aiAnalysisText = "";
+                let usedFallback = false;
                 
                 if (window.AI_API_URL) {
                     try {
@@ -436,24 +431,35 @@
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ transactions: filteredData, start: startDate, end: endDate })
                         });
+                        
+                        if (!response.ok) throw new Error("Erro HTTP");
+                        
                         const data = await response.json();
-                        aiAnalysisText = data.analysis || "Sem análise retornada.";
+                        
+                        // Verifica se a resposta é um erro disfarçado
+                        if (!data.analysis || data.analysis.includes("Erro") || data.analysis.includes("Não foi possível")) {
+                            throw new Error("IA retornou erro ou vazio");
+                        }
+                        
+                        aiAnalysisText = data.analysis;
                     } catch (err) {
-                        console.error("Erro API:", err);
-                        aiAnalysisText = "Erro ao contactar a IA. Verifique a URL do Cloudflare e a conexão.";
+                        console.warn("Falha na IA, usando resumo local:", err);
+                        usedFallback = true;
                     }
                 } else {
-                    await new Promise(r => setTimeout(r, 1500)); 
-                    const totalIncome = filteredData.filter(t => t.amount > 0).reduce((a,b)=>a+b.amount,0);
-                    const totalExpense = Math.abs(filteredData.filter(t => t.amount < 0).reduce((a,b)=>a+b.amount,0));
-                    const savings = totalIncome - totalExpense;
-                    aiAnalysisText = `[SIMULAÇÃO IA]\nResumo:\nReceitas: ${formatCurrency(totalIncome)}\nDespesas: ${formatCurrency(totalExpense)}.\nSaldo: ${formatCurrency(savings)}.`;
+                    usedFallback = true;
                 }
 
-                // Gráficos
-                const income = filteredData.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
-                const expense = Math.abs(filteredData.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
-                
+                // 3. Fallback: Se a IA falhou, gera texto localmente
+                if (usedFallback || !aiAnalysisText) {
+                    aiAnalysisText = `RELATÓRIO AUTOMÁTICO (IA Indisponível):\n\n` +
+                        `No período selecionado, o total de receitas foi de ${formatCurrency(income)} e as despesas somaram ${formatCurrency(expense)}.\n\n` +
+                        `O resultado final é um saldo de ${formatCurrency(savings)}.\n` +
+                        `A categoria onde gastou mais dinheiro foi "${topExpense}".\n\n` +
+                        `Nota: Verifique a configuração da API Cloudflare (Chave API) para obter análises detalhadas da Inteligência Artificial.`;
+                }
+
+                // 4. Gerar Gráficos
                 const ctxBar = document.getElementById('chartBar').getContext('2d');
                 if(window.myBarChart) window.myBarChart.destroy();
                 window.myBarChart = new Chart(ctxBar, {
@@ -462,16 +468,9 @@
                         labels: ['Entradas', 'Saídas'],
                         datasets: [{ label: 'Valores (€)', data: [income, expense], backgroundColor: ['#22c55e', '#ef4444'] }]
                     },
-                    options: { responsive: false, animation: false }
+                    options: { responsive: false, animation: false, plugins: { legend: { display: false } } }
                 });
 
-                const expensesMap = {};
-                filteredData.filter(t=>t.amount<0).forEach(t => {
-                    const k = t.description;
-                    expensesMap[k] = (expensesMap[k] || 0) + Math.abs(t.amount);
-                });
-                const sortedExpenses = Object.entries(expensesMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
-                
                 const ctxPie = document.getElementById('chartPie').getContext('2d');
                 if(window.myPieChart) window.myPieChart.destroy();
                 window.myPieChart = new Chart(ctxPie, {
@@ -485,27 +484,38 @@
 
                 await new Promise(r => setTimeout(r, 500));
 
-                // Geração PDF - Segura
+                // 5. Gerar PDF
                 const { jsPDF } = window.jspdf;
                 const doc = new jsPDF(); 
                 
-                doc.setFontSize(22);
-                doc.setTextColor(37, 99, 235);
-                doc.text("Relatório Financeiro Inteligente", 14, 20);
+                // Cabeçalho
+                doc.setFillColor(37, 99, 235); // Azul
+                doc.rect(0, 0, 210, 20, 'F');
+                doc.setFontSize(18);
+                doc.setTextColor(255, 255, 255);
+                doc.text("Relatório Financeiro", 14, 13);
                 
                 doc.setFontSize(10);
                 doc.setTextColor(100);
-                doc.text(`Período: ${startDate.toLocaleDateString('pt-PT')} a ${endDate.toLocaleDateString('pt-PT')}`, 14, 28);
+                doc.text(`Período: ${startDate.toLocaleDateString('pt-PT')} a ${endDate.toLocaleDateString('pt-PT')}`, 14, 30);
 
-                doc.setFontSize(14);
+                // Texto de Análise
+                doc.setFontSize(12);
                 doc.setTextColor(0);
-                doc.text("Análise da IA", 14, 40);
+                doc.text("Resumo Financeiro", 14, 40);
+                
                 doc.setFontSize(10);
                 doc.setTextColor(60);
                 const splitText = doc.splitTextToSize(aiAnalysisText, 180);
                 doc.text(splitText, 14, 48);
 
-                let currentY = 48 + (splitText.length * 5) + 10;
+                let currentY = 48 + (splitText.length * 5) + 15;
+
+                // Gráficos
+                doc.setFontSize(12);
+                doc.setTextColor(0);
+                doc.text("Gráficos", 14, currentY);
+                currentY += 5;
 
                 const barImg = document.getElementById('chartBar').toDataURL("image/png");
                 const pieImg = document.getElementById('chartPie').toDataURL("image/png");
@@ -515,6 +525,7 @@
                 
                 currentY += 60;
 
+                // Tabela
                 const tableRows = filteredData.map(t => [
                     new Date(t.timestamp).toLocaleDateString('pt-PT'),
                     t.description,
@@ -526,11 +537,9 @@
                         head: [['Data', 'Descrição', 'Valor']],
                         body: tableRows,
                         startY: currentY,
-                        theme: 'grid',
+                        theme: 'striped',
                         headStyles: { fillColor: [37, 99, 235] }
                     });
-                } else {
-                    console.warn("Plugin autoTable não carregado.");
                 }
 
                 doc.save(`relatorio_${Date.now()}.pdf`);

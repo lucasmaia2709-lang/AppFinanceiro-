@@ -9,7 +9,6 @@
     <!-- Bibliotecas PDF (Versões Estáveis) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script>
-        // Shim crítico
         window.jsPDF = window.jspdf.jsPDF;
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf-autotable.min.js"></script>
@@ -27,10 +26,6 @@
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, query, onSnapshot, deleteDoc, doc, updateDoc, getDocs, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // ============================================================
-        // ÁREA DE CONFIGURAÇÃO
-        // ============================================================
-        
         const myFirebaseConfig = {
             apiKey: "AIzaSyDsG8yHgb9_KNX6Z1FUmUNCXEmme1ZhIFo",
             authDomain: "appfinanceiro-eaf7d.firebaseapp.com",
@@ -46,7 +41,6 @@
         const isConfigured = !myFirebaseConfig.apiKey.includes("SUA_API_KEY");
         const firebaseConfig = isConfigured ? myFirebaseConfig : JSON.parse(window.__firebase_config || '{}');
         const appId = window.__app_id || 'default-app'; 
-        // ============================================================
 
         let app, auth, db;
         try {
@@ -61,7 +55,6 @@
         let unsubscribeTransactions = null;
         let transactions = []; 
 
-        // Referências DOM
         const authContainer = document.getElementById('auth-container');
         const appContainer = document.getElementById('app-container');
         const balanceEl = document.getElementById('balance');
@@ -127,8 +120,11 @@
             } catch (error) {
                 if(!auth.currentUser) {
                     let msg = 'Erro de autenticação.';
-                    if(error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') msg = 'Dados incorretos ou conta inexistente.';
-                    if(error.code === 'auth/email-already-in-use') msg = 'Este email já está registado.';
+                    if(error.code === 'auth/invalid-credential') msg = 'Dados incorretos ou conta inexistente.';
+                    else if(error.code === 'auth/email-already-in-use') msg = 'Este email já está registado.';
+                    else if(error.code === 'auth/wrong-password') msg = 'Senha incorreta.';
+                    else if(error.code === 'auth/user-not-found') msg = 'Utilizador não encontrado.';
+                    
                     showAlert(msg, "Erro");
                 }
             } finally {
@@ -152,7 +148,7 @@
                 transactions = [];
                 snapshot.forEach((doc) => transactions.push({ id: doc.id, ...doc.data() }));
                 updateUI();
-                window.transactions = transactions; // Sync global
+                window.transactions = transactions;
             }, handleFirestoreError);
         }
 
@@ -192,7 +188,6 @@
             if(!currentUser) return;
             toggleLoading(true);
             try {
-                // Simplificação: apenas adiciona, assumindo que o user limpa se quiser
                 const col = isConfigured ? collection(db, 'users', currentUser.uid, 'transactions') : collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions');
                 await addDoc(col, { description: 'Salário Inicial', amount, timestamp: Date.now() });
             } catch(e) { handleFirestoreError(e); }
@@ -247,7 +242,6 @@
             }
         }
 
-        // Handlers
         window.handleAddIncome = (e) => { e.preventDefault(); processForm('income', 1); };
         window.handleAddExpense = (e) => { e.preventDefault(); processForm('expense', -1); };
         window.handleSetSalary = (e) => { e.preventDefault(); processForm('salary', 1, true); };
@@ -255,7 +249,6 @@
         function processForm(type, multiplier, isSalary=false) {
             const descEl = document.getElementById(`${type}-description`);
             const amtEl = document.getElementById(`${type}-amount`);
-            // Se for salário, o campo descrição não existe no form, usamos fixo
             const desc = isSalary ? 'Salário Inicial' : descEl.value.trim();
             const val = parseFloat(amtEl.value);
             
@@ -294,7 +287,6 @@
 
         // --- RELATÓRIO AVANÇADO ---
         
-        // Helper para Canvas invisíveis de alta resolução
         function createChart(canvasId, config) {
             const canvas = document.getElementById(canvasId);
             const ctx = canvas.getContext('2d');
@@ -326,7 +318,7 @@
             btn.disabled = true;
 
             try {
-                // 1. Cálculos Locais (Fallback)
+                // 1. Cálculos Locais (Fallback Robusto)
                 const income = filtered.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
                 const expense = Math.abs(filtered.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
                 const savings = income - expense;
@@ -338,7 +330,6 @@
                 });
                 const sortedExp = Object.entries(expMap).sort((a,b)=>b[1]-a[1]);
                 
-                // Timeline
                 const timelineMap = {};
                 filtered.sort((a,b)=>a.timestamp-b.timestamp).forEach(t=>{
                     const day = new Date(t.timestamp).toLocaleDateString('pt-PT', {day:'2-digit', month:'2-digit'});
@@ -349,7 +340,7 @@
                 const labels = Object.keys(timelineMap);
                 const dataPoints = Object.values(timelineMap).map(v => { acc += v; return acc; });
 
-                // 2. IA
+                // 2. IA (Com deteção de erro no retorno)
                 let aiText = "";
                 let fallback = false;
                 
@@ -364,10 +355,15 @@
                                 summary: { income, expense, savings, topExpenses: sortedExp.slice(0,5) }
                             })
                         });
-                        if(!res.ok) throw new Error("Erro HTTP " + res.status);
+                        if(!res.ok) throw new Error("Erro HTTP");
                         const json = await res.json();
                         aiText = json.analysis;
-                        if (!aiText || aiText.includes("Erro")) throw new Error("IA retornou erro");
+                        
+                        // FILTRO CRÍTICO: Se a IA devolver um erro técnico, forçamos o fallback
+                        if (!aiText || aiText.includes("Erro") || aiText.includes("Error") || aiText.includes("Não foi possível")) {
+                            console.warn("Texto da IA contém erro, usando fallback.");
+                            fallback = true;
+                        }
                     } catch(err) {
                         console.warn("IA Falhou:", err);
                         fallback = true;
@@ -375,16 +371,28 @@
                 } else fallback = true;
 
                 if (fallback) {
-                    aiText = `RESUMO AUTOMÁTICO (Offline):\n\nReceitas Totais: ${formatCurrency(income)}\nDespesas Totais: ${formatCurrency(expense)}\nSaldo do Período: ${formatCurrency(savings)}\n\nMaior Gasto: ${sortedExp[0]?.[0] || 'N/A'} (${formatCurrency(sortedExp[0]?.[1]||0)})\n\nDica: Verifique a ligação à IA para obter análises detalhadas.`;
+                    const topName = sortedExp[0]?.[0] || 'Nenhuma';
+                    const topVal = sortedExp[0]?.[1] || 0;
+                    aiText = `RESUMO FINANCEIRO (Modo Automático):\n\n` +
+                        `1. Diagnóstico Geral:\n` +
+                        `Neste período, você acumulou receitas de ${formatCurrency(income)} e teve despesas de ${formatCurrency(expense)}. ` +
+                        `O seu saldo final é de ${formatCurrency(savings)}. ` +
+                        `${savings >= 0 ? "Parabéns, está no verde!" : "Atenção, gastou mais do que ganhou."}\n\n` +
+                        `2. Análise de Despesas:\n` +
+                        `A categoria onde gastou mais dinheiro foi "${topName}", totalizando ${formatCurrency(topVal)}. ` +
+                        `Isto representa cerca de ${expense > 0 ? ((topVal/expense)*100).toFixed(0) : 0}% dos seus gastos totais.\n\n` +
+                        `3. Recomendação:\n` +
+                        `Para melhorar a sua margem, tente reduzir os gastos supérfluos nesta categoria principal. ` +
+                        `Defina um limite diário para o resto do mês para garantir que o saldo se mantém positivo.`;
                 }
 
-                // 3. Gráficos (Alta Resolução)
+                // 3. Gráficos
                 createChart('chartLine', {
                     type: 'line',
                     data: {
                         labels: labels,
                         datasets: [{
-                            label: 'Evolução do Saldo',
+                            label: 'Evolução',
                             data: dataPoints,
                             borderColor: '#2563eb',
                             backgroundColor: 'rgba(37, 99, 235, 0.1)',
@@ -394,13 +402,11 @@
                         }]
                     },
                     options: { 
-                        responsive: false, animation: false, 
-                        devicePixelRatio: 2, // Melhor qualidade no PDF
+                        responsive: false, animation: false, devicePixelRatio: 2,
                         plugins: { legend: {display:false} } 
                     }
                 });
 
-                // Top 5 + Outros
                 const top5 = sortedExp.slice(0,5);
                 const others = sortedExp.slice(5).reduce((a,b)=>a+b[1],0);
                 if(others>0) top5.push(['Outros', others]);
@@ -421,13 +427,12 @@
                     }
                 });
 
-                await new Promise(r => setTimeout(r, 800)); // Espera render
+                await new Promise(r => setTimeout(r, 800)); 
 
                 // 4. PDF
                 const doc = new window.jsPDF();
                 const w = doc.internal.pageSize.getWidth();
                 
-                // Cabeçalho
                 doc.setFillColor(30, 58, 138); 
                 doc.rect(0, 0, w, 40, 'F');
                 doc.setTextColor(255,255,255);
@@ -438,43 +443,36 @@
 
                 let y = 55;
 
-                // Texto IA
                 doc.setTextColor(30,58,138); doc.setFontSize(14); doc.setFont("helvetica", "bold");
-                doc.text("1. ANÁLISE", 14, y);
+                doc.text("1. ANÁLISE DETALHADA", 14, y);
                 y += 8;
                 doc.setTextColor(50,50,50); doc.setFontSize(11); doc.setFont("helvetica", "normal");
                 const lines = doc.splitTextToSize(aiText, 180);
                 doc.text(lines, 14, y);
                 y += (lines.length * 6) + 15;
 
-                // Gráficos
                 doc.setTextColor(30,58,138); doc.setFontSize(14); doc.setFont("helvetica", "bold");
-                doc.text("2. VISUALIZAÇÃO", 14, y);
+                doc.text("2. GRÁFICOS", 14, y);
                 y += 10;
 
-                // Linha (Evolução)
                 try {
                     const lineImg = document.getElementById('chartLine').toDataURL("image/png", 1.0);
-                    // Centralizar imagem larga
                     doc.addImage(lineImg, 'PNG', 15, y, 180, 80);
                     y += 90;
-                } catch(e) { console.error("Erro chart line", e); }
+                } catch(e) {}
 
-                // Check page break
                 if (y > 200) { doc.addPage(); y = 20; }
 
-                // Doughnut (Despesas)
                 try {
                     const pieImg = document.getElementById('chartDoughnut').toDataURL("image/png", 1.0);
                     doc.addImage(pieImg, 'PNG', 40, y, 130, 70);
                     y += 80;
-                } catch(e) { console.error("Erro chart pie", e); }
+                } catch(e) {}
 
                 if (y > 250) { doc.addPage(); y = 20; }
 
-                // Tabela
                 doc.setTextColor(30,58,138); doc.setFontSize(14); doc.setFont("helvetica", "bold");
-                doc.text("3. DETALHES", 14, y);
+                doc.text("3. EXTRATO", 14, y);
                 y += 10;
 
                 if (doc.autoTable) {
@@ -505,7 +503,6 @@
             }
         };
 
-        // --- Utils UI ---
         window.toggleHistory = () => {
             const el = document.getElementById('history-container');
             const icon = document.getElementById('history-arrow');
@@ -536,7 +533,6 @@
             infoModal.classList.remove('hidden');
         };
 
-        // Export Simples (Mantido)
         window.exportToCSV = () => {
             if(!transactions.length) return showAlert("Sem dados.");
             const csv = ['Data;Descrição;Valor'].concat(
@@ -562,6 +558,7 @@
         };
 
         window.deleteTransaction = deleteTransactionFromDB;
+        window.transactions = transactions;
     </script>
 
     <style>

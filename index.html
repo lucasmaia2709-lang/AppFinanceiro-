@@ -36,8 +36,6 @@
             measurementId: "G-JLJL3X7LLV"
         };
 
-        window.AI_API_URL = "https://appfinanceiro.lucasabreucotefis.workers.dev"; 
-
         const isConfigured = !myFirebaseConfig.apiKey.includes("SUA_API_KEY");
         const firebaseConfig = isConfigured ? myFirebaseConfig : JSON.parse(window.__firebase_config || '{}');
         const appId = window.__app_id || 'default-app'; 
@@ -283,7 +281,7 @@
             closeModal('editModal');
         };
 
-        // --- RELATÓRIO IA & Gráficos ---
+        // --- RELATÓRIO LOCAL E GRÁFICOS ---
 
         function createChart(canvasId, config) {
             const canvas = document.getElementById(canvasId);
@@ -292,7 +290,7 @@
             window[canvasId] = new Chart(ctx, config);
         }
 
-        window.generateAIReport = async (e) => {
+        window.generateLocalReport = async (e) => {
             e.preventDefault();
             const startStr = document.getElementById('report-start').value;
             const endStr = document.getElementById('report-end').value;
@@ -312,11 +310,11 @@
             toggleLoading(true);
             const btn = document.getElementById('btn-generate-report');
             const originalText = btn.textContent;
-            btn.textContent = "A gerar relatório...";
+            btn.textContent = "A gerar...";
             btn.disabled = true;
 
             try {
-                // 1. Cálculos Locais (Sempre feitos)
+                // 1. Cálculos Locais
                 const income = filteredData.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
                 const expense = Math.abs(filteredData.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
                 const savings = income - expense;
@@ -328,6 +326,7 @@
                 });
                 const sortedExpenses = Object.entries(expensesMap).sort((a,b)=>b[1]-a[1]);
                 
+                // Timeline
                 const timelineMap = {};
                 filteredData.sort((a,b)=>a.timestamp-b.timestamp).forEach(t=>{
                     const day = new Date(t.timestamp).toLocaleDateString('pt-PT', {day:'2-digit', month:'2-digit'});
@@ -338,53 +337,7 @@
                 const timelineLabels = Object.keys(timelineMap);
                 const timelineData = Object.values(timelineMap).map(val => { acc += val; return acc; });
 
-                // 2. Chamar IA
-                let aiAnalysisText = "";
-                let usedFallback = false;
-                
-                if (window.AI_API_URL) {
-                    try {
-                        const response = await fetch(window.AI_API_URL, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ 
-                                transactions: filteredData, 
-                                start: start.toISOString().split('T')[0], 
-                                end: end.toISOString().split('T')[0],
-                                summary: { income, expense, savings, topExpenses: sortedExpenses.slice(0, 5) }
-                            })
-                        });
-                        
-                        if (!response.ok) throw new Error("Erro HTTP");
-                        const data = await response.json();
-                        aiAnalysisText = data.analysis;
-
-                        // PROTEÇÃO EXTRA: Se a resposta da IA contiver "Erro" ou "Error" (mesmo com HTTP 200), força fallback
-                        if (!aiAnalysisText || aiAnalysisText.toLowerCase().includes("erro") || aiAnalysisText.toLowerCase().includes("não foi possível")) {
-                            console.warn("IA devolveu erro técnico no texto:", aiAnalysisText);
-                            usedFallback = true;
-                        }
-
-                    } catch (err) {
-                        console.warn("Falha na IA:", err);
-                        usedFallback = true;
-                    }
-                } else {
-                    usedFallback = true;
-                }
-
-                // 3. Fallback (Garante que nunca sai erro no PDF)
-                if (usedFallback) {
-                    const topName = sortedExpenses[0]?.[0] || 'Nenhuma';
-                    const topVal = sortedExpenses[0]?.[1] || 0;
-                    aiAnalysisText = `RESUMO FINANCEIRO (Modo Offline):\n\n` +
-                        `No período analisado, acumulou receitas de ${formatCurrency(income)} e teve despesas de ${formatCurrency(expense)}, resultando num saldo de ${formatCurrency(savings)}.\n\n` +
-                        `A categoria onde gastou mais foi "${topName}" (${formatCurrency(topVal)}). ` +
-                        `Isto representa uma fatia significativa do seu orçamento.\n\n` +
-                        `Recomendação: Para terminar o mês com mais segurança, tente reduzir os gastos não essenciais na categoria principal identificada acima.`;
-                }
-
-                // 4. Gráficos
+                // 2. Gráficos
                 createChart('chartLine', {
                     type: 'line',
                     data: {
@@ -431,7 +384,7 @@
 
                 await new Promise(r => setTimeout(r, 800));
 
-                // 5. PDF
+                // 3. PDF
                 const doc = new window.jsPDF(); 
                 const pageWidth = doc.internal.pageSize.getWidth();
                 
@@ -449,24 +402,34 @@
 
                 let cursorY = 55;
 
+                // Resumo Texto
                 doc.setTextColor(30, 58, 138);
                 doc.setFontSize(14);
                 doc.setFont("helvetica", "bold");
-                doc.text("1. ANÁLISE", 14, cursorY);
-                cursorY += 8;
+                doc.text("1. RESUMO GERAL", 14, cursorY);
+                cursorY += 10;
 
                 doc.setTextColor(50, 50, 50);
-                doc.setFontSize(11);
+                doc.setFontSize(12);
                 doc.setFont("helvetica", "normal");
-                const splitAnalysis = doc.splitTextToSize(aiAnalysisText, 180);
-                doc.text(splitAnalysis, 14, cursorY);
                 
-                cursorY += (splitAnalysis.length * 6) + 15;
+                const topName = sortedExpenses[0]?.[0] || 'Nenhuma';
+                const topVal = sortedExpenses[0]?.[1] || 0;
+                
+                const summaryText = `Receitas Totais: ${formatCurrency(income)}\n` +
+                                  `Despesas Totais: ${formatCurrency(expense)}\n` +
+                                  `Saldo Líquido: ${formatCurrency(savings)}\n\n` +
+                                  `Maior Categoria de Gasto: ${topName} (${formatCurrency(topVal)})`;
+                
+                const splitText = doc.splitTextToSize(summaryText, 180);
+                doc.text(splitText, 14, cursorY);
+                cursorY += 40;
 
+                // Gráficos
                 doc.setTextColor(30, 58, 138);
                 doc.setFontSize(14);
                 doc.setFont("helvetica", "bold");
-                doc.text("2. VISUALIZAÇÃO", 14, cursorY);
+                doc.text("2. GRÁFICOS", 14, cursorY);
                 cursorY += 10;
 
                 try {
@@ -488,7 +451,7 @@
                 doc.setTextColor(30, 58, 138);
                 doc.setFontSize(14);
                 doc.setFont("helvetica", "bold");
-                doc.text("3. DETALHE", 14, cursorY);
+                doc.text("3. EXTRATO DETALHADO", 14, cursorY);
                 cursorY += 10;
 
                 if (typeof doc.autoTable === 'function') {
@@ -549,6 +512,7 @@
             infoModal.classList.remove('hidden');
         };
 
+        // Exportação Simples CORRIGIDA
         window.exportToCSV = () => {
             if(!transactions.length) return showAlert("Sem dados.");
             const csv = ['Data;Descrição;Valor'].concat(
@@ -623,7 +587,7 @@
                 <p class="text-xs text-gray-400 mt-1">Conta: <span id="user-info">...</span></p>
             </div>
             <div class="flex gap-2">
-                <button onclick="openModal('reportModal')" class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-sm font-medium hover:bg-indigo-200 transition">Relatório IA</button>
+                <button onclick="openModal('reportModal')" class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-sm font-medium hover:bg-indigo-200 transition">Relatório PDF</button>
                 <button onclick="logout()" class="bg-gray-200 text-gray-600 px-3 py-1 rounded-lg text-sm hover:bg-red-100 hover:text-red-600 transition">Sair</button>
             </div>
         </header>
@@ -648,7 +612,7 @@
                         <svg id="history-arrow" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform duration-300"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </div>
                     <div class="flex gap-2" onclick="event.stopPropagation()">
-                         <button onclick="exportToCSV()" class="text-sm text-blue-500 font-medium">CSV</button>
+                         <button onclick="openModal('exportModal')" class="text-sm text-blue-500 font-medium">Exportar</button>
                          <button onclick="resetApp()" class="text-sm text-gray-400 hover:text-red-500">Limpar</button>
                     </div>
                 </div>
@@ -719,8 +683,8 @@
 
         <div id="reportModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
             <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm">
-                <h2 class="text-2xl font-bold mb-4 text-indigo-600">Relatório IA</h2>
-                <form onsubmit="generateAIReport(event)">
+                <h2 class="text-2xl font-bold mb-4 text-indigo-600">Relatório PDF</h2>
+                <form onsubmit="generateLocalReport(event)">
                     <label class="block text-sm mb-1">Início</label>
                     <input type="date" id="report-start" required class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
                     <label class="block text-sm mb-1">Fim</label>

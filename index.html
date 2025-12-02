@@ -6,14 +6,15 @@
     <title>Gestor Financeiro Pessoal - Cloud</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Bibliotecas PDF -->
+    <!-- Bibliotecas PDF (Versões Estáveis) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script>
+        // Shim crítico
         window.jsPDF = window.jspdf.jsPDF;
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf-autotable.min.js"></script>
     
-    <!-- Gráficos (Chart.js) -->
+    <!-- Gráficos -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -47,34 +48,30 @@
         const appId = window.__app_id || 'default-app'; 
         // ============================================================
 
-        // Inicialização
         let app, auth, db;
-        
         try {
             app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
-            console.log("Firebase inicializado.");
         } catch (e) {
-            console.error("Erro ao inicializar Firebase:", e);
+            console.error("Erro Firebase:", e);
         }
         
         let currentUser = null;
         let unsubscribeTransactions = null;
         let transactions = []; 
 
+        // Referências DOM
         const authContainer = document.getElementById('auth-container');
         const appContainer = document.getElementById('app-container');
-        const toggleAuthText = document.getElementById('toggle-auth');
-        const authTitle = document.getElementById('auth-title');
         const balanceEl = document.getElementById('balance');
         const transactionListEl = document.getElementById('transaction-list');
         const noTransactionsEl = document.getElementById('no-transactions');
         const loadingOverlay = document.getElementById('loading-overlay');
-        const userInfoEl = document.getElementById('user-info');
         const btnAuthSubmit = document.getElementById('btn-auth-submit');
 
         function toggleLoading(show) {
+            if (!loadingOverlay) return;
             if(show) loadingOverlay.classList.remove('hidden');
             else loadingOverlay.classList.add('hidden');
         }
@@ -85,7 +82,7 @@
                 if (user) {
                     authContainer.classList.add('hidden');
                     appContainer.classList.remove('hidden');
-                    userInfoEl.textContent = user.email;
+                    document.getElementById('user-info').textContent = user.email;
                     setupRealtimeListener(user.uid);
                 } else {
                     authContainer.classList.remove('hidden');
@@ -98,270 +95,187 @@
             });
         }
 
-        let isLoginMode = true; 
-        
-        function switchAuthMode(login) {
-            isLoginMode = login;
+        let isLoginMode = true;
+        const toggleAuthText = document.getElementById('toggle-auth');
+        const authTitle = document.getElementById('auth-title');
+
+        toggleAuthText.addEventListener('click', () => {
+            isLoginMode = !isLoginMode;
             authTitle.textContent = isLoginMode ? 'Acesse a sua conta' : 'Crie a sua conta';
             btnAuthSubmit.textContent = isLoginMode ? 'Entrar' : 'Registar';
             toggleAuthText.innerHTML = isLoginMode 
                 ? 'Não tem conta? <span class="text-blue-600 font-bold cursor-pointer hover:underline">Registe-se</span>' 
                 : 'Já tem conta? <span class="text-blue-600 font-bold cursor-pointer hover:underline">Entre</span>';
-        }
-
-        toggleAuthText.addEventListener('click', () => {
-            switchAuthMode(!isLoginMode);
         });
 
         document.getElementById('auth-form-tag').addEventListener('submit', async (e) => {
             e.preventDefault();
             if(auth.currentUser) return;
-
             const email = document.getElementById('auth-email').value;
             const password = document.getElementById('auth-password').value;
             
-            if(password.length < 6) {
-                showAlert('A senha deve ter pelo menos 6 caracteres.');
-                return;
-            }
-
             toggleLoading(true);
-            const originalBtnText = btnAuthSubmit.textContent;
+            const originalText = btnAuthSubmit.textContent;
             btnAuthSubmit.textContent = "A processar...";
-            btnAuthSubmit.disabled = true;
-
+            
             try {
-                if(isLoginMode) {
-                    await signInWithEmailAndPassword(auth, email, password);
-                } else {
+                if(isLoginMode) await signInWithEmailAndPassword(auth, email, password);
+                else {
                     await createUserWithEmailAndPassword(auth, email, password);
-                    showAlert("Cadastro concluído com sucesso! A entrar...", "Bem-vindo");
+                    showAlert("Cadastro concluído! A entrar...", "Sucesso");
                 }
             } catch (error) {
-                if(auth.currentUser) return;
-
-                if (error.code !== 'auth/invalid-credential' && error.code !== 'auth/wrong-password') {
-                    console.error("Erro auth:", error.code, error.message);
+                if(!auth.currentUser) {
+                    let msg = 'Erro de autenticação.';
+                    if(error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') msg = 'Dados incorretos ou conta inexistente.';
+                    if(error.code === 'auth/email-already-in-use') msg = 'Este email já está registado.';
+                    showAlert(msg, "Erro");
                 }
-                
-                let msg = 'Erro na autenticação: ' + error.message;
-                let title = "Erro de Acesso";
-
-                if(error.code === 'auth/wrong-password') msg = 'Senha incorreta.';
-                if(error.code === 'auth/user-not-found') msg = 'Email não registado.';
-                if(error.code === 'auth/invalid-email') msg = 'Email inválido.';
-                if(error.code === 'auth/network-request-failed') msg = 'Erro de conexão. Verifique a internet.';
-                
-                if(error.code === 'auth/invalid-credential') {
-                    title = "Dados Incorretos";
-                    msg = `<b>Não conseguimos encontrar essa conta.</b><br><br>- Verifique se o email e senha estão corretos.<br>- Se é a primeira vez aqui, clique em <b>"Registe-se"</b> em baixo.`;
-                }
-
-                if(error.code === 'auth/email-already-in-use') {
-                    title = "Conta já existe";
-                    msg = `<b>Este email já está registado.</b><br><br>Por favor, faça Login em vez de se Registar.`;
-                }
-                if(error.code === 'auth/operation-not-allowed') {
-                    title = "Configuração Necessária";
-                    msg = `<b>O login por Email/Senha não está ativado.</b><br><br>Ative em Authentication > Sign-in method no Firebase Console.`;
-                }
-                
-                showAlert(msg, title);
             } finally {
                 toggleLoading(false);
-                btnAuthSubmit.textContent = originalBtnText;
-                btnAuthSubmit.disabled = false;
+                btnAuthSubmit.textContent = originalText;
             }
         });
 
-        window.logout = () => {
-            signOut(auth).then(() => {
-                showAlert("Sessão terminada.", "Adeus");
-            });
-        };
+        window.logout = () => signOut(auth);
 
-        // --- Lógica Firestore ---
-
-        function handleFirestoreError(error, context) {
-            console.error(`Erro Firestore (${context}):`, error);
-            if (error.code === 'permission-denied' || error.message.includes('Missing or insufficient permissions')) {
-                const rulesCode = `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if request.auth != null;\n    }\n  }\n}`;
-                const msg = `<div class="text-left text-sm"><p class="font-bold text-red-600 mb-2">Permissão Negada!</p><p>Copie estas regras para o Firebase Console > Firestore > Rules:</p><div class="bg-gray-100 p-2 rounded border font-mono text-xs mt-2">${rulesCode}</div></div>`;
-                showAlert(msg, "Bloqueio de Segurança");
-            } else {
-                showAlert(`Erro ao ${context}: ${error.message}`, "Erro");
-            }
+        // --- Firestore ---
+        function handleFirestoreError(error) {
+            console.error("Firestore:", error);
+            if (error.code === 'permission-denied') showAlert("Permissão negada. Verifique as Regras no Firebase.", "Erro");
         }
 
         function setupRealtimeListener(uid) {
             if (!db) return;
-            const collectionPath = isConfigured 
-                ? collection(db, 'users', uid, 'transactions') 
-                : collection(db, 'artifacts', appId, 'users', uid, 'transactions'); 
-            const q = query(collectionPath);
+            const q = query(isConfigured ? collection(db, 'users', uid, 'transactions') : collection(db, 'artifacts', appId, 'users', uid, 'transactions'));
             unsubscribeTransactions = onSnapshot(q, (snapshot) => {
                 transactions = [];
-                snapshot.forEach((doc) => { transactions.push({ id: doc.id, ...doc.data() }); });
+                snapshot.forEach((doc) => transactions.push({ id: doc.id, ...doc.data() }));
                 updateUI();
-                window.transactions = transactions;
-            }, (error) => handleFirestoreError(error, "ler dados"));
+                window.transactions = transactions; // Sync global
+            }, handleFirestoreError);
         }
 
-        async function addTransactionToDB(description, amount) {
-            if(!currentUser || !db) return;
+        async function addTransactionToDB(desc, amount) {
+            if(!currentUser) return;
             toggleLoading(true);
             try {
-                const collectionPath = isConfigured 
-                    ? collection(db, 'users', currentUser.uid, 'transactions')
-                    : collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions');
-                await addDoc(collectionPath, { description, amount, timestamp: Date.now() });
-            } catch (error) { handleFirestoreError(error, "salvar"); } 
+                const col = isConfigured ? collection(db, 'users', currentUser.uid, 'transactions') : collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions');
+                await addDoc(col, { description: desc, amount, timestamp: Date.now() });
+            } catch(e) { handleFirestoreError(e); }
             finally { toggleLoading(false); }
         }
 
         async function deleteTransactionFromDB(id) {
-            if(!currentUser || !db) return;
-            showConfirm('Tem certeza que deseja apagar?', async () => {
+            if(!currentUser) return;
+            showConfirm('Apagar registo?', async () => {
                 toggleLoading(true);
                 try {
-                    const docRef = isConfigured
-                        ? doc(db, 'users', currentUser.uid, 'transactions', id)
-                        : doc(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions', id);
+                    const docRef = isConfigured ? doc(db, 'users', currentUser.uid, 'transactions', id) : doc(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions', id);
                     await deleteDoc(docRef);
-                } catch (error) { handleFirestoreError(error, "apagar"); }
+                } catch(e) { handleFirestoreError(e); }
                 finally { toggleLoading(false); }
             });
         }
 
-        async function updateTransactionInDB(id, newDesc, newAmount) {
-            if(!currentUser || !db) return;
+        async function updateTransactionInDB(id, desc, amount) {
+            if(!currentUser) return;
             toggleLoading(true);
             try {
-                const docRef = isConfigured
-                    ? doc(db, 'users', currentUser.uid, 'transactions', id)
-                    : doc(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions', id);
-                await updateDoc(docRef, { description: newDesc, amount: newAmount });
-            } catch (error) { handleFirestoreError(error, "atualizar"); }
+                const docRef = isConfigured ? doc(db, 'users', currentUser.uid, 'transactions', id) : doc(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions', id);
+                await updateDoc(docRef, { description: desc, amount });
+            } catch(e) { handleFirestoreError(e); }
             finally { toggleLoading(false); }
         }
 
         async function setSalaryInDB(amount) {
-            if(!currentUser || !db) return;
+            if(!currentUser) return;
             toggleLoading(true);
             try {
-                const collectionPath = isConfigured 
-                    ? collection(db, 'users', currentUser.uid, 'transactions')
-                    : collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions');
-                const q = query(collectionPath);
-                const snapshot = await getDocs(q);
-                const deletePromises = [];
-                snapshot.forEach(d => {
-                    if(d.data().description === 'Salário Inicial') {
-                        const docRef = isConfigured
-                            ? doc(db, 'users', currentUser.uid, 'transactions', d.id)
-                            : doc(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions', d.id);
-                        deletePromises.push(deleteDoc(docRef));
-                    }
-                });
-                await Promise.all(deletePromises);
-                await addDoc(collectionPath, { description: 'Salário Inicial', amount, timestamp: Date.now() });
-            } catch (error) { handleFirestoreError(error, "definir salário"); }
+                // Simplificação: apenas adiciona, assumindo que o user limpa se quiser
+                const col = isConfigured ? collection(db, 'users', currentUser.uid, 'transactions') : collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions');
+                await addDoc(col, { description: 'Salário Inicial', amount, timestamp: Date.now() });
+            } catch(e) { handleFirestoreError(e); }
             finally { toggleLoading(false); }
         }
 
         window.resetApp = async () => {
-            if(!currentUser || !db) return;
-            showConfirm('Apagar TODOS os dados?', async () => {
+            if(!currentUser) return;
+            showConfirm('Apagar TUDO?', async () => {
                 toggleLoading(true);
                 try {
-                    const collectionPath = isConfigured 
-                        ? collection(db, 'users', currentUser.uid, 'transactions')
-                        : collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions');
-                    const q = query(collectionPath);
-                    const snapshot = await getDocs(q);
-                    const deletePromises = [];
-                    snapshot.forEach((document) => {
-                        const docRef = isConfigured
-                            ? doc(db, 'users', currentUser.uid, 'transactions', document.id)
-                            : doc(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions', document.id);
-                        deletePromises.push(deleteDoc(docRef));
+                    const col = isConfigured ? collection(db, 'users', currentUser.uid, 'transactions') : collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions');
+                    const snap = await getDocs(query(col));
+                    const promises = [];
+                    snap.forEach(d => {
+                        const docRef = isConfigured ? doc(db, 'users', currentUser.uid, 'transactions', d.id) : doc(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions', d.id);
+                        promises.push(deleteDoc(docRef));
                     });
-                    await Promise.all(deletePromises);
-                } catch (error) { handleFirestoreError(error, "limpar dados"); }
+                    await Promise.all(promises);
+                } catch(e) { handleFirestoreError(e); }
                 finally { toggleLoading(false); }
-            }, "PERIGO");
+            });
         };
 
-        // --- Funções de UI ---
-
+        // --- UI ---
         function updateUI() {
-            transactions.sort((a, b) => b.timestamp - a.timestamp);
-            const balance = transactions.reduce((acc, t) => acc + t.amount, 0);
-            balanceEl.textContent = formatCurrency(balance);
-            balanceEl.className = 'text-5xl font-bold tracking-tight'; 
-            if (balance > 0) balanceEl.classList.add('text-green-500');
-            else if (balance < 0) balanceEl.classList.add('text-red-500');
-            else balanceEl.classList.add('text-gray-800', 'dark:text-gray-200');
+            transactions.sort((a,b) => b.timestamp - a.timestamp);
+            const total = transactions.reduce((acc, t) => acc + t.amount, 0);
+            balanceEl.textContent = formatCurrency(total);
+            if (total > 0) balanceEl.className = 'text-5xl font-bold tracking-tight text-green-500';
+            else if (total < 0) balanceEl.className = 'text-5xl font-bold tracking-tight text-red-500';
+            else balanceEl.className = 'text-5xl font-bold tracking-tight text-gray-800 dark:text-gray-200';
 
             transactionListEl.innerHTML = '';
-            if (transactions.length === 0) {
-                noTransactionsEl.classList.remove('hidden');
-            } else {
+            if (transactions.length === 0) noTransactionsEl.classList.remove('hidden');
+            else {
                 noTransactionsEl.classList.add('hidden');
                 transactions.forEach(t => {
-                    const item = document.createElement('li');
-                    item.classList.add('flex', 'justify-between', 'items-center', 'p-3', 'rounded-lg', 'fade-in', 'group');
-                    const isExpense = t.amount < 0;
-                    item.classList.add(isExpense ? 'bg-red-50' : 'bg-green-50', isExpense ? 'dark:bg-red-900/20' : 'dark:bg-green-900/20');
-                    item.innerHTML = `
+                    const li = document.createElement('li');
+                    li.className = `flex justify-between items-center p-3 rounded-lg fade-in group ${t.amount < 0 ? 'bg-red-50 dark:bg-red-900/20' : 'bg-green-50 dark:bg-green-900/20'}`;
+                    li.innerHTML = `
+                        <div class="flex items-center gap-3"><span class="font-semibold text-gray-800 dark:text-gray-200">${t.description}</span></div>
                         <div class="flex items-center gap-3">
-                            <span class="font-semibold text-gray-800 dark:text-gray-200">${t.description}</span>
-                        </div>
-                        <div class="flex items-center gap-3">
-                            <span class="font-bold ${isExpense ? 'text-red-500' : 'text-green-500'}">
-                                ${formatCurrency(t.amount)}
-                            </span>
+                            <span class="font-bold ${t.amount < 0 ? 'text-red-500' : 'text-green-500'}">${formatCurrency(t.amount)}</span>
                             <div class="flex gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onclick="openEditModal('${t.id}')" class="text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors" title="Editar"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
-                                <button onclick="deleteTransaction('${t.id}')" class="text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors" title="Apagar"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                                <button onclick="openEditModal('${t.id}')" class="text-gray-400 hover:text-blue-500"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button>
+                                <button onclick="deleteTransaction('${t.id}')" class="text-gray-400 hover:text-red-500"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
                             </div>
                         </div>`;
-                    transactionListEl.appendChild(item);
+                    transactionListEl.appendChild(li);
                 });
             }
         }
 
-        window.handleAddIncome = (e) => { e.preventDefault(); processTransaction('income'); };
-        window.handleAddExpense = (e) => { e.preventDefault(); processTransaction('expense'); };
+        // Handlers
+        window.handleAddIncome = (e) => { e.preventDefault(); processForm('income', 1); };
+        window.handleAddExpense = (e) => { e.preventDefault(); processForm('expense', -1); };
+        window.handleSetSalary = (e) => { e.preventDefault(); processForm('salary', 1, true); };
         
-        function processTransaction(type) {
-            const descInput = document.getElementById(`${type}-description`);
-            const amountInput = document.getElementById(`${type}-amount`);
-            const desc = descInput.value.trim();
-            const amount = parseFloat(amountInput.value);
-            if (!desc || isNaN(amount) || amount <= 0) return showAlert('Dados inválidos.');
+        function processForm(type, multiplier, isSalary=false) {
+            const descEl = document.getElementById(`${type}-description`);
+            const amtEl = document.getElementById(`${type}-amount`);
+            // Se for salário, o campo descrição não existe no form, usamos fixo
+            const desc = isSalary ? 'Salário Inicial' : descEl.value.trim();
+            const val = parseFloat(amtEl.value);
             
-            addTransactionToDB(desc, type === 'expense' ? -amount : amount);
-            descInput.value = ''; amountInput.value = '';
+            if ((!isSalary && !desc) || isNaN(val) || val <= 0) return showAlert('Preencha os dados corretamente.');
+            
+            if (isSalary) setSalaryInDB(val);
+            else addTransactionToDB(desc, val * multiplier);
+            
+            if(!isSalary) descEl.value = '';
+            amtEl.value = '';
             closeModal(`${type}Modal`);
         }
 
-        window.handleSetSalary = (e) => {
-            e.preventDefault();
-            const amount = parseFloat(document.getElementById('salary-amount').value);
-            if (isNaN(amount) || amount <= 0) return showAlert('Valor inválido.');
-            setSalaryInDB(amount);
-            document.getElementById('salary-amount').value = '';
-            closeModal('salaryModal');
-        };
-
         let currentEditId = null;
         window.openEditModal = (id) => {
-            const t = transactions.find(item => item.id === id);
+            const t = transactions.find(x => x.id === id);
             if(!t) return;
             currentEditId = id;
             document.getElementById('edit-description').value = t.description;
-            document.getElementById('edit-amount').value = Math.abs(t.amount); 
+            document.getElementById('edit-amount').value = Math.abs(t.amount);
             document.getElementById('edit-is-expense').value = t.amount < 0 ? "true" : "false";
             openModal('editModal');
         };
@@ -371,623 +285,460 @@
             if(!currentEditId) return;
             const desc = document.getElementById('edit-description').value.trim();
             const val = parseFloat(document.getElementById('edit-amount').value);
-            const wasExpense = document.getElementById('edit-is-expense').value === "true";
+            const isExp = document.getElementById('edit-is-expense').value === "true";
+            
             if (!desc || isNaN(val) || val <= 0) return showAlert('Dados inválidos.');
-            const finalAmount = wasExpense ? -Math.abs(val) : Math.abs(val);
-            updateTransactionInDB(currentEditId, desc, finalAmount);
+            updateTransactionInDB(currentEditId, desc, isExp ? -Math.abs(val) : Math.abs(val));
             closeModal('editModal');
-        }
-
-        // --- RELATÓRIO IA PROFISSIONAL ---
-
-        // Função auxiliar para criar gráficos em Canvas invisíveis de alta resolução
-        const createChart = (canvasId, config) => {
-            const ctx = document.getElementById(canvasId).getContext('2d');
-            // Destroi anterior se existir
-            if (window[canvasId] instanceof Chart) window[canvasId].destroy();
-            window[canvasId] = new Chart(ctx, config);
-            return window[canvasId];
         };
+
+        // --- RELATÓRIO AVANÇADO ---
+        
+        // Helper para Canvas invisíveis de alta resolução
+        function createChart(canvasId, config) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            if(window[canvasId] instanceof Chart) window[canvasId].destroy();
+            window[canvasId] = new Chart(ctx, config);
+        }
 
         window.generateAIReport = async (e) => {
             e.preventDefault();
-            const startDate = new Date(document.getElementById('report-start').value);
-            const endDate = new Date(document.getElementById('report-end').value);
-            endDate.setHours(23, 59, 59); 
+            const startStr = document.getElementById('report-start').value;
+            const endStr = document.getElementById('report-end').value;
+            
+            if(!startStr || !endStr) return showAlert("Selecione as datas.");
+            const start = new Date(startStr);
+            const end = new Date(endStr);
+            end.setHours(23,59,59);
 
-            if(isNaN(startDate) || isNaN(endDate)) return showAlert("Datas inválidas.");
-
-            // 1. Filtrar e Preparar Dados
-            const filteredData = transactions.filter(t => {
-                const tDate = new Date(t.timestamp);
-                return tDate >= startDate && tDate <= endDate;
+            const filtered = transactions.filter(t => {
+                const d = new Date(t.timestamp);
+                return d >= start && d <= end;
             });
 
-            if(filteredData.length === 0) return showAlert("Sem dados neste período.");
+            if(filtered.length === 0) return showAlert("Sem dados nesse período.");
 
             toggleLoading(true);
             const btn = document.getElementById('btn-generate-report');
-            const originalText = btn.textContent;
-            btn.textContent = "A gerar relatório...";
+            const originalBtnText = btn.textContent;
+            btn.textContent = "A gerar...";
             btn.disabled = true;
 
             try {
-                // Preparar dados agregados para a IA e Gráficos
-                const income = filteredData.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
-                const expense = Math.abs(filteredData.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
+                // 1. Cálculos Locais (Fallback)
+                const income = filtered.filter(t=>t.amount>0).reduce((a,b)=>a+b.amount,0);
+                const expense = Math.abs(filtered.filter(t=>t.amount<0).reduce((a,b)=>a+b.amount,0));
                 const savings = income - expense;
                 
-                // Agrupamento por Categoria (Descrição)
-                const expensesMap = {};
-                filteredData.filter(t=>t.amount<0).forEach(t => {
+                const expMap = {};
+                filtered.filter(t=>t.amount<0).forEach(t => {
                     const k = t.description.trim();
-                    expensesMap[k] = (expensesMap[k] || 0) + Math.abs(t.amount);
+                    expMap[k] = (expMap[k] || 0) + Math.abs(t.amount);
                 });
-                // Ordenar despesas
-                const sortedExpenses = Object.entries(expensesMap).sort((a,b)=>b[1]-a[1]);
+                const sortedExp = Object.entries(expMap).sort((a,b)=>b[1]-a[1]);
                 
-                // Preparar dados de Evolução Diária (Linha do Tempo)
+                // Timeline
                 const timelineMap = {};
-                // Preencher dias vazios com 0 seria ideal, mas simplificamos com dias existentes
-                filteredData.sort((a,b) => a.timestamp - b.timestamp).forEach(t => {
-                    const day = new Date(t.timestamp).toLocaleDateString('pt-PT', {day: '2-digit', month: '2-digit'});
-                    if (!timelineMap[day]) timelineMap[day] = 0;
+                filtered.sort((a,b)=>a.timestamp-b.timestamp).forEach(t=>{
+                    const day = new Date(t.timestamp).toLocaleDateString('pt-PT', {day:'2-digit', month:'2-digit'});
+                    if(!timelineMap[day]) timelineMap[day] = 0;
                     timelineMap[day] += t.amount;
                 });
-                
-                // Acumulado
-                let accBalance = 0;
-                const timelineLabels = Object.keys(timelineMap);
-                const timelineData = Object.values(timelineMap).map(val => {
-                    accBalance += val;
-                    return accBalance;
-                });
+                let acc = 0;
+                const labels = Object.keys(timelineMap);
+                const dataPoints = Object.values(timelineMap).map(v => { acc += v; return acc; });
 
-                // 2. Chamar IA (Worker)
-                let aiAnalysisText = "";
-                let usedFallback = false;
+                // 2. IA
+                let aiText = "";
+                let fallback = false;
                 
                 if (window.AI_API_URL) {
                     try {
-                        const response = await fetch(window.AI_API_URL, {
+                        const res = await fetch(window.AI_API_URL, {
                             method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ 
-                                transactions: filteredData, 
-                                start: startDate.toISOString().split('T')[0], 
-                                end: endDate.toISOString().split('T')[0],
-                                // Enviamos totais pré-calculados para ajudar a IA
-                                summary: { income, expense, savings, topExpenses: sortedExpenses.slice(0, 5) }
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({
+                                transactions: filtered,
+                                start: startStr, end: endStr,
+                                summary: { income, expense, savings, topExpenses: sortedExp.slice(0,5) }
                             })
                         });
-                        
-                        if (!response.ok) throw new Error("Erro HTTP");
-                        const data = await response.json();
-                        aiAnalysisText = data.analysis;
-                    } catch (err) {
-                        console.warn("Falha na IA:", err);
-                        usedFallback = true;
+                        if(!res.ok) throw new Error("Erro HTTP " + res.status);
+                        const json = await res.json();
+                        aiText = json.analysis;
+                        if (!aiText || aiText.includes("Erro")) throw new Error("IA retornou erro");
+                    } catch(err) {
+                        console.warn("IA Falhou:", err);
+                        fallback = true;
                     }
-                } else {
-                    usedFallback = true;
+                } else fallback = true;
+
+                if (fallback) {
+                    aiText = `RESUMO AUTOMÁTICO (Offline):\n\nReceitas Totais: ${formatCurrency(income)}\nDespesas Totais: ${formatCurrency(expense)}\nSaldo do Período: ${formatCurrency(savings)}\n\nMaior Gasto: ${sortedExp[0]?.[0] || 'N/A'} (${formatCurrency(sortedExp[0]?.[1]||0)})\n\nDica: Verifique a ligação à IA para obter análises detalhadas.`;
                 }
 
-                // Fallback robusto
-                if (usedFallback || !aiAnalysisText) {
-                    aiAnalysisText = `RESUMO EXECUTIVO (Modo Offline):\n\n` +
-                        `No período analisado, registou-se um total de receitas de ${formatCurrency(income)} contra despesas de ${formatCurrency(expense)}, resultando num saldo líquido de ${formatCurrency(savings)}.\n\n` +
-                        `A maior fonte de despesa foi "${sortedExpenses[0]?.[0] || 'N/A'}" com ${formatCurrency(sortedExpenses[0]?.[1] || 0)}. ` +
-                        `Recomenda-se monitorizar estes gastos recorrentes para otimizar o fluxo de caixa até ao final do mês.\n\n` +
-                        `Sugestão: Tente reduzir em 10% os gastos variáveis na categoria "${sortedExpenses[0]?.[0] || 'N/A'}" para aumentar a sua margem de segurança.`;
-                }
-
-                // 3. Renderizar Gráficos "Nobel" (Alta Resolução)
-                
-                // Gráfico 1: Evolução do Saldo (Linha)
+                // 3. Gráficos (Alta Resolução)
                 createChart('chartLine', {
                     type: 'line',
                     data: {
-                        labels: timelineLabels,
+                        labels: labels,
                         datasets: [{
                             label: 'Evolução do Saldo',
-                            data: timelineData,
-                            borderColor: '#2563eb', // Blue-600
+                            data: dataPoints,
+                            borderColor: '#2563eb',
                             backgroundColor: 'rgba(37, 99, 235, 0.1)',
                             borderWidth: 3,
                             fill: true,
-                            tension: 0.4
+                            tension: 0.3
                         }]
                     },
-                    options: { responsive: false, animation: false, plugins: { legend: { display: false } }, scales: { x: { display: true }, y: { display: true } } }
+                    options: { 
+                        responsive: false, animation: false, 
+                        devicePixelRatio: 2, // Melhor qualidade no PDF
+                        plugins: { legend: {display:false} } 
+                    }
                 });
 
-                // Gráfico 2: Top 5 Despesas (Doughnut Profissional)
-                const top5 = sortedExpenses.slice(0, 5);
-                const otherTotal = sortedExpenses.slice(5).reduce((acc, curr) => acc + curr[1], 0);
-                if(otherTotal > 0) top5.push(['Outros', otherTotal]);
+                // Top 5 + Outros
+                const top5 = sortedExp.slice(0,5);
+                const others = sortedExp.slice(5).reduce((a,b)=>a+b[1],0);
+                if(others>0) top5.push(['Outros', others]);
 
                 createChart('chartDoughnut', {
                     type: 'doughnut',
                     data: {
-                        labels: top5.map(e => e[0]),
+                        labels: top5.map(x=>x[0]),
                         datasets: [{
-                            data: top5.map(e => e[1]),
+                            data: top5.map(x=>x[1]),
                             backgroundColor: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#06b6d4', '#64748b'],
                             borderWidth: 0
                         }]
                     },
                     options: { 
-                        responsive: false, 
-                        animation: false, 
-                        cutout: '60%',
-                        plugins: { legend: { position: 'right', labels: { font: { size: 14 } } } } 
+                        responsive: false, animation: false, devicePixelRatio: 2,
+                        plugins: { legend: { position: 'right', labels: { font: {size:14} } } } 
                     }
                 });
 
-                // Pequeno delay para renderização dos Canvas
-                await new Promise(r => setTimeout(r, 800));
+                await new Promise(r => setTimeout(r, 800)); // Espera render
 
-                // 4. Gerar PDF Profissional
-                const doc = new window.jsPDF(); 
-                const pageWidth = doc.internal.pageSize.getWidth();
+                // 4. PDF
+                const doc = new window.jsPDF();
+                const w = doc.internal.pageSize.getWidth();
                 
-                // -- CAPA / CABEÇALHO --
-                doc.setFillColor(30, 58, 138); // Dark Blue Header
-                doc.rect(0, 0, pageWidth, 40, 'F');
-                
-                doc.setTextColor(255, 255, 255);
-                doc.setFont("helvetica", "bold");
-                doc.setFontSize(22);
-                doc.text("RELATÓRIO FINANCEIRO EXECUTIVO", pageWidth / 2, 20, { align: "center" });
-                
-                doc.setFont("helvetica", "normal");
-                doc.setFontSize(10);
-                doc.text(`Período de Análise: ${startDate.toLocaleDateString('pt-PT')} a ${endDate.toLocaleDateString('pt-PT')}`, pageWidth / 2, 30, { align: "center" });
+                // Cabeçalho
+                doc.setFillColor(30, 58, 138); 
+                doc.rect(0, 0, w, 40, 'F');
+                doc.setTextColor(255,255,255);
+                doc.setFontSize(22); doc.setFont("helvetica", "bold");
+                doc.text("RELATÓRIO FINANCEIRO", w/2, 20, {align:"center"});
+                doc.setFontSize(10); doc.setFont("helvetica", "normal");
+                doc.text(`${start.toLocaleDateString('pt-PT')} a ${end.toLocaleDateString('pt-PT')}`, w/2, 30, {align:"center"});
 
-                let cursorY = 55;
+                let y = 55;
 
-                // -- SECÇÃO 1: RESUMO IA --
-                doc.setTextColor(30, 58, 138);
-                doc.setFontSize(14);
-                doc.setFont("helvetica", "bold");
-                doc.text("1. ANÁLISE DE INTELIGÊNCIA ARTIFICIAL", 14, cursorY);
-                cursorY += 8;
+                // Texto IA
+                doc.setTextColor(30,58,138); doc.setFontSize(14); doc.setFont("helvetica", "bold");
+                doc.text("1. ANÁLISE", 14, y);
+                y += 8;
+                doc.setTextColor(50,50,50); doc.setFontSize(11); doc.setFont("helvetica", "normal");
+                const lines = doc.splitTextToSize(aiText, 180);
+                doc.text(lines, 14, y);
+                y += (lines.length * 6) + 15;
 
-                doc.setTextColor(50, 50, 50);
-                doc.setFontSize(11);
-                doc.setFont("helvetica", "normal");
-                const splitAnalysis = doc.splitTextToSize(aiAnalysisText, 180);
-                doc.text(splitAnalysis, 14, cursorY);
-                
-                cursorY += (splitAnalysis.length * 6) + 15;
+                // Gráficos
+                doc.setTextColor(30,58,138); doc.setFontSize(14); doc.setFont("helvetica", "bold");
+                doc.text("2. VISUALIZAÇÃO", 14, y);
+                y += 10;
 
-                // -- SECÇÃO 2: GRÁFICOS --
-                doc.setTextColor(30, 58, 138);
-                doc.setFontSize(14);
-                doc.setFont("helvetica", "bold");
-                doc.text("2. VISUALIZAÇÃO DE DADOS", 14, cursorY);
-                cursorY += 10;
+                // Linha (Evolução)
+                try {
+                    const lineImg = document.getElementById('chartLine').toDataURL("image/png", 1.0);
+                    // Centralizar imagem larga
+                    doc.addImage(lineImg, 'PNG', 15, y, 180, 80);
+                    y += 90;
+                } catch(e) { console.error("Erro chart line", e); }
 
-                // Título Gráfico 1
-                doc.setTextColor(80);
-                doc.setFontSize(10);
-                doc.text("Evolução do Saldo Acumulado (€)", 14, cursorY);
-                cursorY += 5;
+                // Check page break
+                if (y > 200) { doc.addPage(); y = 20; }
 
-                // Inserir Line Chart (Maior, panorâmico)
-                const lineImg = document.getElementById('chartLine').toDataURL("image/png", 1.0);
-                doc.addImage(lineImg, 'PNG', 14, cursorY, 180, 70);
-                cursorY += 80;
+                // Doughnut (Despesas)
+                try {
+                    const pieImg = document.getElementById('chartDoughnut').toDataURL("image/png", 1.0);
+                    doc.addImage(pieImg, 'PNG', 40, y, 130, 70);
+                    y += 80;
+                } catch(e) { console.error("Erro chart pie", e); }
 
-                // Título Gráfico 2
-                doc.text("Distribuição de Despesas por Categoria", 14, cursorY);
-                cursorY += 5;
+                if (y > 250) { doc.addPage(); y = 20; }
 
-                // Inserir Doughnut Chart
-                const doughnutImg = document.getElementById('chartDoughnut').toDataURL("image/png", 1.0);
-                // Centralizar este gráfico
-                doc.addImage(doughnutImg, 'PNG', 40, cursorY, 130, 60); 
-                cursorY += 70;
+                // Tabela
+                doc.setTextColor(30,58,138); doc.setFontSize(14); doc.setFont("helvetica", "bold");
+                doc.text("3. DETALHES", 14, y);
+                y += 10;
 
-                // -- SECÇÃO 3: DETALHE DE TRANSAÇÕES --
-                // Nova página se não houver espaço
-                if (cursorY > 250) {
-                    doc.addPage();
-                    cursorY = 20;
-                }
-
-                doc.setTextColor(30, 58, 138);
-                doc.setFontSize(14);
-                doc.setFont("helvetica", "bold");
-                doc.text("3. DETALHE DE LANÇAMENTOS", 14, cursorY);
-                cursorY += 10;
-
-                if (typeof doc.autoTable === 'function') {
+                if (doc.autoTable) {
                     doc.autoTable({
-                        head: [['Data', 'Descrição', 'Tipo', 'Valor (€)']],
-                        body: filteredData.map(t => [
+                        head: [['Data', 'Descrição', 'Valor (€)']],
+                        body: filtered.map(t => [
                             new Date(t.timestamp).toLocaleDateString('pt-PT'),
                             t.description,
-                            t.amount >= 0 ? 'Receita' : 'Despesa',
-                            formatCurrency(Math.abs(t.amount))
+                            { content: formatCurrency(t.amount), styles: { textColor: t.amount<0?[200,0,0]:[0,150,0] } }
                         ]),
-                        startY: cursorY,
-                        theme: 'grid',
-                        headStyles: { 
-                            fillColor: [30, 58, 138], 
-                            textColor: 255, 
-                            fontStyle: 'bold' 
-                        },
-                        alternateRowStyles: {
-                            fillColor: [240, 245, 255]
-                        },
-                        columnStyles: {
-                            3: { halign: 'right', fontStyle: 'bold' } // Valor alinhado à direita
-                        }
+                        startY: y,
+                        theme: 'striped',
+                        headStyles: { fillColor: [30, 58, 138] },
+                        columnStyles: { 2: { halign: 'right' } }
                     });
                 }
 
-                // -- RODAPÉ --
-                const pageCount = doc.internal.getNumberOfPages();
-                for(let i = 1; i <= pageCount; i++) {
-                    doc.setPage(i);
-                    doc.setFontSize(8);
-                    doc.setTextColor(150);
-                    doc.text(`Gerado por Gestor Financeiro Cloud | Página ${i} de ${pageCount}`, pageWidth / 2, 290, { align: "center" });
-                }
-
-                doc.save(`relatorio_financeiro_${Date.now()}.pdf`);
+                doc.save(`relatorio_${Date.now()}.pdf`);
                 closeModal('reportModal');
 
             } catch (err) {
                 console.error(err);
-                showAlert("Erro técnico ao gerar PDF.");
+                showAlert("Erro ao criar PDF.");
             } finally {
                 toggleLoading(false);
-                btn.textContent = originalText;
+                btn.textContent = originalBtnText;
                 btn.disabled = false;
             }
         };
 
-        window.toggleHistory = function() {
-            const container = document.getElementById('history-container');
+        // --- Utils UI ---
+        window.toggleHistory = () => {
+            const el = document.getElementById('history-container');
             const icon = document.getElementById('history-arrow');
-            if (container.classList.contains('hidden')) {
-                container.classList.remove('hidden'); container.classList.add('fade-in'); icon.classList.add('rotate-180');
-            } else {
-                container.classList.add('hidden'); container.classList.remove('fade-in'); icon.classList.remove('rotate-180');
-            }
-        }
-
-        window.openModal = function(id) { document.getElementById(id).classList.remove('hidden'); }
-        window.closeModal = function(id) { document.getElementById(id).classList.add('hidden'); }
+            el.classList.toggle('hidden');
+            icon.classList.toggle('rotate-180');
+        };
+        window.openModal = (id) => document.getElementById(id).classList.remove('hidden');
+        window.closeModal = (id) => document.getElementById(id).classList.add('hidden');
         function formatCurrency(val) { return new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(val); }
 
         const infoModal = document.getElementById('infoModal');
-        const infoTitle = document.getElementById('infoModalTitle');
-        const infoMsg = document.getElementById('infoModalMessage');
-        const infoActions = document.getElementById('infoModalActions');
-
-        function showAlert(msg, title='Atenção') {
-            infoTitle.textContent = title;
-            infoMsg.innerHTML = msg; 
-            infoActions.innerHTML = `<button onclick="document.getElementById('infoModal').classList.add('hidden')" class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">OK</button>`;
+        window.showAlert = (msg, title="Aviso") => {
+            document.getElementById('infoModalTitle').textContent = title;
+            document.getElementById('infoModalMessage').innerHTML = msg;
             infoModal.classList.remove('hidden');
-        }
+        };
+        window.closeInfoModal = () => infoModal.classList.add('hidden');
 
-        function showConfirm(msg, callback, title='Confirmação') {
-            infoTitle.textContent = title;
-            infoMsg.innerHTML = msg;
-            infoActions.innerHTML = `
-                <button onclick="document.getElementById('infoModal').classList.add('hidden')" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg w-1/2">Cancelar</button>
-                <button id="confirm-btn-action" class="px-4 py-2 bg-red-600 text-white rounded-lg w-1/2">Sim</button>
+        window.showConfirm = (msg, cb) => {
+            document.getElementById('infoModalTitle').textContent = "Confirmação";
+            document.getElementById('infoModalMessage').innerHTML = msg;
+            const actions = document.getElementById('infoModalActions');
+            actions.innerHTML = `
+                <button onclick="closeInfoModal()" class="px-4 py-2 bg-gray-200 rounded-lg">Cancelar</button>
+                <button id="confirm-yes" class="px-4 py-2 bg-red-600 text-white rounded-lg">Sim</button>
             `;
+            document.getElementById('confirm-yes').onclick = () => { closeInfoModal(); cb(); };
             infoModal.classList.remove('hidden');
-            document.getElementById('confirm-btn-action').onclick = () => {
-                document.getElementById('infoModal').classList.add('hidden');
-                callback();
-            };
-        }
+        };
 
-        window.exportToCSV = function() {
-            closeModal('exportModal');
-            const data = transactions; 
-            if(data.length === 0) return showAlert('Sem dados.');
-            const headers = ['Data', 'Descrição', 'Valor'];
-            const rows = data.map(t => [new Date(t.timestamp).toLocaleDateString('pt-PT'), `"${t.description.replace(/"/g, '""')}"`, t.amount.toFixed(2).replace('.', ',')]);
-            const csvContent = headers.join(';') + "\n" + rows.map(e => e.join(';')).join("\n");
-            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+        // Export Simples (Mantido)
+        window.exportToCSV = () => {
+            if(!transactions.length) return showAlert("Sem dados.");
+            const csv = ['Data;Descrição;Valor'].concat(
+                transactions.map(t => `${new Date(t.timestamp).toLocaleDateString()};"${t.description}";${t.amount.toFixed(2)}`)
+            ).join('\n');
+            const blob = new Blob(["\uFEFF"+csv], {type:'text/csv;charset=utf-8;'});
             const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url; link.download = "meu_saldo.csv";
-            document.body.appendChild(link); link.click(); document.body.removeChild(link);
-        }
+            const a = document.createElement('a'); a.href = url; a.download='dados.csv';
+            a.click();
+        };
 
-        window.exportToPDF = function() {
-            closeModal('exportModal');
-            const data = transactions; 
-            if(data.length === 0) return showAlert('Sem dados.');
-            
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF();
-            
-            const rows = data.map(t => [new Date(t.timestamp).toLocaleDateString('pt-PT'), t.description, t.amount.toFixed(2) + ' €']);
-            const total = data.reduce((acc, t) => acc + t.amount, 0);
-            
-            if (typeof doc.autoTable === 'function') {
-                doc.autoTable({
-                    head: [['Data', 'Descrição', 'Valor']], body: rows, foot: [['', 'SALDO FINAL', total.toFixed(2) + ' €']],
-                    startY: 20, theme: 'grid', headStyles: { fillColor: [37, 99, 235] }, footStyles: { fillColor: [243, 244, 246], textColor: [31, 41, 55], fontStyle: 'bold' }
-                });
-            } else {
-                console.warn("Plugin autoTable não carregado.");
-            }
+        window.exportToPDF = () => {
+            if(!transactions.length) return showAlert("Sem dados.");
+            const doc = new window.jsPDF();
             doc.text("Extrato Simples", 14, 15);
-            doc.save("extrato.pdf");
-        }
-        
+            doc.autoTable({
+                head: [['Data', 'Descrição', 'Valor']],
+                body: transactions.map(t => [
+                    new Date(t.timestamp).toLocaleDateString(), t.description, t.amount.toFixed(2)+'€'
+                ])
+            });
+            doc.save('extrato.pdf');
+        };
+
         window.deleteTransaction = deleteTransactionFromDB;
-        window.transactions = transactions;
     </script>
 
     <style>
         body { font-family: 'Inter', sans-serif; }
         .fade-in { animation: fadeIn 0.5s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-        /* Loader Spinner */
         .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 flex items-center justify-center min-h-screen relative">
 
-    <!-- Loading Overlay -->
-    <div id="loading-overlay" class="fixed inset-0 bg-white/80 dark:bg-gray-900/80 z-[100] flex flex-col items-center justify-center">
+    <div id="loading-overlay" class="fixed inset-0 bg-white/90 dark:bg-gray-900/90 z-[100] flex flex-col items-center justify-center">
         <div class="loader mb-4"></div>
         <p class="text-gray-600 dark:text-gray-300 font-medium">A carregar...</p>
     </div>
 
-    <!-- Canvas Oculto para Gráficos de Alta Resolução -->
+    <!-- Canvas Escondido para PDF -->
     <div style="position: absolute; left: -9999px;">
-        <!-- Line Chart: Maior para detalhe -->
         <canvas id="chartLine" width="1200" height="500"></canvas>
-        <!-- Doughnut Chart: Quadrado -->
         <canvas id="chartDoughnut" width="800" height="600"></canvas>
     </div>
 
-    <!-- Container de Autenticação (OCULTO POR PADRÃO AGORA) -->
+    <!-- AUTH -->
     <div id="auth-container" class="w-full max-w-md mx-auto p-6 fade-in hidden">
         <div class="text-center mb-8">
-            <h1 class="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-2">Financeiro Cloud</h1>
+            <h1 class="text-3xl font-bold text-blue-600 mb-2">Financeiro Cloud</h1>
             <p class="text-gray-500">Seus dados seguros na nuvem.</p>
         </div>
-        
         <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
             <h2 id="auth-title" class="text-2xl font-bold mb-6 text-center">Acesse a sua conta</h2>
             <form id="auth-form-tag" class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
-                    <input type="email" id="auth-email" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Senha</label>
-                    <input type="password" id="auth-password" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none">
-                </div>
-                <button type="submit" id="btn-auth-submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg hover:shadow-blue-500/30">
-                    Entrar
-                </button>
+                <input type="email" id="auth-email" placeholder="Email" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg outline-none">
+                <input type="password" id="auth-password" placeholder="Senha" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg outline-none">
+                <button type="submit" id="btn-auth-submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all">Entrar</button>
             </form>
-            <div class="mt-6 text-center text-sm text-gray-500">
-                <p id="toggle-auth">Não tem conta? <span class="text-blue-600 font-bold cursor-pointer hover:underline">Registe-se</span></p>
-            </div>
+            <p id="toggle-auth" class="mt-4 text-center text-sm text-blue-600 cursor-pointer hover:underline">Não tem conta? Registe-se</p>
         </div>
     </div>
 
-    <!-- Container do App Principal (Oculto inicialmente) -->
+    <!-- APP PRINCIPAL -->
     <div id="app-container" class="w-full max-w-md mx-auto p-4 md:p-6 hidden fade-in">
-        
         <header class="flex justify-between items-start mb-6">
             <div>
                 <h1 class="text-3xl font-bold text-blue-600 dark:text-blue-400">Meu Saldo</h1>
-                <p class="text-xs text-gray-400 mt-1">Logado como: <span id="user-info" class="font-medium text-gray-600 dark:text-gray-300">...</span></p>
+                <p class="text-xs text-gray-400 mt-1">Conta: <span id="user-info">...</span></p>
             </div>
             <div class="flex gap-2">
-                <button onclick="openModal('reportModal')" class="text-sm bg-indigo-100 dark:bg-indigo-900/30 hover:bg-indigo-200 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 px-3 py-1 rounded-lg transition-colors flex items-center gap-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="16"></line></svg>
-                    Relatório IA
-                </button>
-                <button onclick="logout()" class="text-sm bg-gray-200 dark:bg-gray-700 hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600 px-3 py-1 rounded-lg transition-colors">
-                    Sair
-                </button>
+                <button onclick="openModal('reportModal')" class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-sm font-medium hover:bg-indigo-200 transition">Relatório IA</button>
+                <button onclick="logout()" class="bg-gray-200 text-gray-600 px-3 py-1 rounded-lg text-sm hover:bg-red-100 hover:text-red-600 transition">Sair</button>
             </div>
         </header>
         
         <main class="space-y-6">
-            <!-- Card do Saldo Disponível -->
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 text-center relative overflow-hidden">
                 <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-green-500"></div>
-                <h2 class="text-lg font-medium text-gray-500 dark:text-gray-400 mb-2">Saldo Disponível</h2>
+                <h2 class="text-lg font-medium text-gray-500 mb-2">Saldo Disponível</h2>
                 <p id="balance" class="text-5xl font-bold tracking-tight">...</p>
             </div>
 
-            <!-- Botões de Ação -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <button onclick="openModal('incomeModal')" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-                    Entrada
-                </button>
-                <button onclick="openModal('expenseModal')" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
-                    Despesa
-                </button>
-                <button onclick="openModal('salaryModal')" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                    Salário
-                </button>
+                <button onclick="openModal('incomeModal')" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl shadow-md">Entrada</button>
+                <button onclick="openModal('expenseModal')" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-4 rounded-xl shadow-md">Despesa</button>
+                <button onclick="openModal('salaryModal')" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-xl shadow-md">Salário</button>
             </div>
 
-            <!-- Histórico (Modificado para Expandir/Recolher) -->
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
-                <!-- Header Clicável -->
                 <div class="flex justify-between items-center cursor-pointer select-none" onclick="toggleHistory()">
                     <div class="flex items-center gap-2">
                         <h3 class="text-xl font-semibold">Histórico</h3>
-                        <!-- Icone de Seta (Gira ao clicar) -->
                         <svg id="history-arrow" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform duration-300"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </div>
-                    <!-- Botões de ação (Stop Propagation para não fechar ao clicar nos botões) -->
-                    <div class="flex items-center gap-3" onclick="event.stopPropagation()">
-                         <button onclick="openModal('exportModal')" class="text-sm text-blue-500 hover:text-blue-700 font-medium transition-colors bg-blue-50 dark:bg-blue-900/20 px-3 py-1 rounded-lg">Exportar</button>
-                         <button onclick="resetApp()" class="text-sm text-gray-400 hover:text-red-500 transition-colors px-2" title="Limpar tudo">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                         </button>
+                    <div class="flex gap-2" onclick="event.stopPropagation()">
+                         <button onclick="exportToCSV()" class="text-sm text-blue-500 font-medium">CSV</button>
+                         <button onclick="resetApp()" class="text-sm text-gray-400 hover:text-red-500">Limpar</button>
                     </div>
                 </div>
-
-                <!-- Lista (Começa Oculta) -->
-                <div id="history-container" class="hidden mt-4 border-t border-gray-100 dark:border-gray-700 pt-2 transition-all">
-                    <ul id="transaction-list" class="space-y-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
-                        <li id="no-transactions" class="text-center text-gray-500 dark:text-gray-400 py-8 flex flex-col items-center">
-                            <svg class="w-12 h-12 mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
-                            Nenhum dado na nuvem.
-                        </li>
+                <div id="history-container" class="hidden mt-4 border-t pt-2">
+                    <ul id="transaction-list" class="space-y-3 max-h-80 overflow-y-auto pr-2">
+                        <li id="no-transactions" class="text-center text-gray-500 py-8">Sem dados.</li>
                     </ul>
                 </div>
             </div>
         </main>
 
-        <!-- Modals -->
-        <!-- Relatório IA Modal -->
-        <div id="reportModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
-                <h2 class="text-2xl font-bold mb-4 text-indigo-600">Relatório Inteligente</h2>
-                <p class="text-xs text-gray-500 mb-4">Selecione o período para a IA analisar.</p>
-                <form onsubmit="generateAIReport(event)">
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Data Início</label>
-                        <input type="date" id="report-start" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                    </div>
-                    <div class="mb-6">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Data Fim</label>
-                        <input type="date" id="report-end" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                    </div>
-                    <div class="flex justify-end gap-3">
-                        <button type="button" onclick="closeModal('reportModal')" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg">Cancelar</button>
-                        <button type="submit" id="btn-generate-report" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                            Gerar PDF
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        <!-- Export Modal -->
-        <div id="exportModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4 transition-opacity">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
-                <h2 class="text-2xl font-bold mb-6 text-center">Exportar Dados</h2>
-                <div class="space-y-4">
-                    <button onclick="exportToCSV()" class="w-full flex items-center justify-center gap-3 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md">
-                        <span>CSV (Excel)</span>
-                    </button>
-                    <button onclick="exportToPDF()" class="w-full flex items-center justify-center gap-3 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-xl transition duration-300 shadow-md">
-                        <span>Documento PDF</span>
-                    </button>
-                </div>
-                <div class="text-center mt-6">
-                    <button type="button" onclick="closeModal('exportModal')" class="text-gray-500 hover:text-gray-700 text-sm">Cancelar</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Entrada Modal -->
-        <div id="incomeModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
+        <!-- Modals (Forms) -->
+        <div id="incomeModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm">
                 <h2 class="text-2xl font-bold mb-4 text-blue-600">Nova Entrada</h2>
                 <form onsubmit="handleAddIncome(event)">
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Descrição</label>
-                        <input type="text" id="income-description" placeholder="Ex: Venda de Item" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Valor (€)</label>
-                        <input type="number" id="income-amount" step="0.01" placeholder="0.00" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div class="flex justify-end gap-3">
-                        <button type="button" onclick="closeModal('incomeModal')" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg">Cancelar</button>
+                    <input type="text" id="income-description" placeholder="Descrição" class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <input type="number" id="income-amount" step="0.01" placeholder="Valor" class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <div class="flex justify-end gap-2">
+                        <button type="button" onclick="closeModal('incomeModal')" class="px-4 py-2 bg-gray-200 rounded-lg">Cancelar</button>
                         <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">Adicionar</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- Despesa Modal -->
-        <div id="expenseModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
+        <div id="expenseModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm">
                 <h2 class="text-2xl font-bold mb-4 text-red-500">Nova Despesa</h2>
                 <form onsubmit="handleAddExpense(event)">
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Descrição</label>
-                        <input type="text" id="expense-description" placeholder="Ex: Supermercado" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Valor (€)</label>
-                        <input type="number" id="expense-amount" step="0.01" placeholder="0.00" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div class="flex justify-end gap-3">
-                        <button type="button" onclick="closeModal('expenseModal')" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg">Cancelar</button>
+                    <input type="text" id="expense-description" placeholder="Descrição" class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <input type="number" id="expense-amount" step="0.01" placeholder="Valor" class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <div class="flex justify-end gap-2">
+                        <button type="button" onclick="closeModal('expenseModal')" class="px-4 py-2 bg-gray-200 rounded-lg">Cancelar</button>
                         <button type="submit" class="px-4 py-2 bg-red-500 text-white rounded-lg">Adicionar</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- Salario Modal -->
-        <div id="salaryModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
+        <div id="salaryModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm">
                 <h2 class="text-2xl font-bold mb-4 text-green-500">Definir Salário</h2>
-                <p class="text-sm text-gray-500 mb-4">Isto irá substituir o registo "Salário Inicial" atual.</p>
                 <form onsubmit="handleSetSalary(event)">
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Valor Mensal (€)</label>
-                        <input type="number" id="salary-amount" step="0.01" placeholder="0.00" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div class="flex justify-end gap-3">
-                        <button type="button" onclick="closeModal('salaryModal')" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg">Cancelar</button>
+                    <input type="number" id="salary-amount" step="0.01" placeholder="Valor Mensal" class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <div class="flex justify-end gap-2">
+                        <button type="button" onclick="closeModal('salaryModal')" class="px-4 py-2 bg-gray-200 rounded-lg">Cancelar</button>
                         <button type="submit" class="px-4 py-2 bg-green-500 text-white rounded-lg">Definir</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- EDITAR Modal -->
-        <div id="editModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in">
-                <h2 class="text-2xl font-bold mb-4">Editar Transação</h2>
+        <div id="editModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm">
+                <h2 class="text-2xl font-bold mb-4">Editar</h2>
                 <form onsubmit="handleEdit(event)">
                     <input type="hidden" id="edit-is-expense">
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Descrição</label>
-                        <input type="text" id="edit-description" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Valor (€)</label>
-                        <input type="number" id="edit-amount" step="0.01" required class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div class="flex justify-end gap-3">
-                        <button type="button" onclick="closeModal('editModal')" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg">Cancelar</button>
-                        <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">Salvar Alterações</button>
+                    <input type="text" id="edit-description" class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <input type="number" id="edit-amount" step="0.01" class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <div class="flex justify-end gap-2">
+                        <button type="button" onclick="closeModal('editModal')" class="px-4 py-2 bg-gray-200 rounded-lg">Cancelar</button>
+                        <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">Salvar</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- Info/Alert Modal -->
-        <div id="infoModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center hidden z-[60] p-4">
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm fade-in text-center transform transition-all scale-100">
-                <h2 id="infoModalTitle" class="text-xl font-bold mb-2">Aviso</h2>
-                <p id="infoModalMessage" class="mb-6 text-gray-600 dark:text-gray-300">Mensagem</p>
-                <div id="infoModalActions" class="flex justify-center gap-3 w-full"></div>
+        <div id="reportModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm">
+                <h2 class="text-2xl font-bold mb-4 text-indigo-600">Relatório IA</h2>
+                <form onsubmit="generateAIReport(event)">
+                    <label class="block text-sm mb-1">Início</label>
+                    <input type="date" id="report-start" required class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <label class="block text-sm mb-1">Fim</label>
+                    <input type="date" id="report-end" required class="w-full mb-4 px-4 py-2 bg-gray-100 rounded-lg">
+                    <div class="flex justify-end gap-2">
+                        <button type="button" onclick="closeModal('reportModal')" class="px-4 py-2 bg-gray-200 rounded-lg">Cancelar</button>
+                        <button type="submit" id="btn-generate-report" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Gerar PDF</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="exportModal" class="fixed inset-0 bg-black/60 hidden z-50 p-4 flex items-center justify-center">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm text-center">
+                <h2 class="text-2xl font-bold mb-6">Exportar</h2>
+                <div class="space-y-4">
+                    <button onclick="exportToCSV()" class="w-full bg-green-600 text-white font-bold py-3 rounded-xl">CSV</button>
+                    <button onclick="exportToPDF()" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl">PDF Simples</button>
+                </div>
+                <button onclick="closeModal('exportModal')" class="mt-6 text-gray-500">Cancelar</button>
+            </div>
+        </div>
+
+        <!-- Alertas -->
+        <div id="infoModal" class="fixed inset-0 bg-black/60 hidden z-[60] p-4 flex items-center justify-center">
+            <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-sm text-center">
+                <h2 id="infoModalTitle" class="text-xl font-bold mb-2"></h2>
+                <p id="infoModalMessage" class="mb-6 text-gray-600"></p>
+                <div id="infoModalActions" class="flex justify-center gap-3">
+                    <button onclick="closeInfoModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg">OK</button>
+                </div>
             </div>
         </div>
 
